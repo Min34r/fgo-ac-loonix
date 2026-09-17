@@ -1,0 +1,15 @@
+{
+  "format": "fgoac-loadout",
+  "version": 1,
+  "name": "Mash Kyrielight Starter",
+  "cards": [
+    {
+      "file": "00130_SVT00011_A00_NORMAL.bmp",
+      "copy": 1
+    },
+    {
+      "file": "00517_CE00027_A00_HOLO.bmp",
+      "copy": 1
+    }
+  ]
+}

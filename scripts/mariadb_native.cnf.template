@@ -1,0 +1,23 @@
+# Template for standalone MariaDB instance running on port 3307
+[mariadbd]
+datadir=@SERVER_DIR@/data/mariadb
+port=3307
+bind-address=127.0.0.1
+socket=@SERVER_DIR@/state/mariadb.sock
+skip-name-resolve
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+max_connections=50
+max_allowed_packet=64M
+performance_schema=OFF
+skip-log-bin
+innodb_flush_log_at_trx_commit=2
+sync_binlog=0
+log-error=@SERVER_DIR@/state/mariadb_native.log
+pid-file=@SERVER_DIR@/state/mariadb_native.pid
+
+[client]
+host=127.0.0.1
+port=3307
+socket=@SERVER_DIR@/state/mariadb.sock
+default-character-set=utf8mb4

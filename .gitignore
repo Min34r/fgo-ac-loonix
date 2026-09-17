@@ -1,0 +1,52 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Game executables & binary libraries (Proprietary)
+*.exe
+*.dll
+*.farc
+*.bin
+*.dat
+
+# Game assets & print archives (Proprietary)
+DEVICE/print/
+App/zh/rom/
+GameData/
+AMFS/
+
+# Wine prefix & runtime state
+wineprefix/
+compat/
+*.log
+*.sock
+*.pid
+state/
+
+# MariaDB data & socket directories
+Server/data/
+Server/state/
+Server/mariadb/
+mariadb_data/
+
+# Runtime configs and active user deck
+App/segatools.ini
+App/fgo-launcher.json
+App/deck.json
+logs/
+scratch/
+
+# OS artifacts
+.directory
+.DS_Store
+*.swp
+*~

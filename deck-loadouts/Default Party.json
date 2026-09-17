@@ -1,0 +1,31 @@
+{
+  "format": "fgoac-loadout",
+  "version": 1,
+  "name": "Default Party",
+  "cards": [
+    {
+      "file": "03725_SVT00153_A03_NORMAL.bmp",
+      "copy": 1
+    },
+    {
+      "file": "03854_SVT00150_A04_NORMAL.bmp",
+      "copy": 1
+    },
+    {
+      "file": "00517_CE00027_A00_HOLO.bmp",
+      "copy": 1
+    },
+    {
+      "file": "00517_CE00027_A00_HOLO.bmp",
+      "copy": 1
+    },
+    {
+      "file": "00517_CE00027_A00_HOLO.bmp",
+      "copy": 1
+    },
+    {
+      "file": "03166_SVT00129_A03_HOLO.bmp",
+      "copy": 1
+    }
+  ]
+}
