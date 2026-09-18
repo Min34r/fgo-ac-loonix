@@ -112,6 +112,23 @@ class NewAccountDialog(QDialog):
                 padding: 6px 10px;
                 font-size: 13px;
             }}
+            QComboBox QAbstractItemView {{
+                background-color: {Theme.PLATE};
+                color: {Theme.TEXT};
+                border: 1px solid {Theme.ICE};
+                selection-background-color: {Theme.LINE};
+                selection-color: {Theme.ICE};
+                padding: 2px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 24px;
+                padding: 4px 8px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {Theme.LINE_SOFT};
+                color: {Theme.ICE};
+            }}
         """)
 
         layout = QVBoxLayout(self)

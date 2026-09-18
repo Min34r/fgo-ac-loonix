@@ -86,6 +86,70 @@ class Theme:
         }}
     """
 
+    COMBOBOX = f"""
+        QComboBox {{
+            background-color: {PLATE};
+            color: {TEXT};
+            border: 1px solid {LINE};
+            border-radius: 3px;
+            padding: 4px 10px;
+            font-size: 12px;
+            min-height: 22px;
+        }}
+        QComboBox:hover, QComboBox:focus {{
+            border-color: {ICE};
+        }}
+        QComboBox:disabled {{
+            background-color: {GROUND};
+            color: {TEXT_FAINT};
+            border-color: {LINE_SOFT};
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 22px;
+            border-left: 1px solid {LINE};
+            background-color: {PLATE_LOW};
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }}
+        QComboBox::drop-down:hover {{
+            background-color: {LINE_SOFT};
+        }}
+        QComboBox::down-arrow {{
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {TEXT_MUTED};
+        }}
+        QComboBox::down-arrow:hover {{
+            border-top-color: {ICE};
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {PLATE};
+            color: {TEXT};
+            border: 1px solid {ICE};
+            selection-background-color: {LINE};
+            selection-color: {ICE};
+            padding: 2px;
+            outline: none;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 24px;
+            padding: 4px 8px;
+            border: none;
+        }}
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {LINE_SOFT};
+            color: {ICE};
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {LINE};
+            color: {ICE};
+        }}
+    """
+
     GLOBAL_QSS = f"""
         * {{
             outline: none;
@@ -137,5 +201,66 @@ class Theme:
         }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0px;
+        }}
+        QComboBox {{
+            background-color: {PLATE};
+            color: {TEXT};
+            border: 1px solid {LINE};
+            border-radius: 3px;
+            padding: 4px 10px;
+            font-size: 12px;
+            min-height: 22px;
+        }}
+        QComboBox:hover, QComboBox:focus {{
+            border-color: {ICE};
+        }}
+        QComboBox:disabled {{
+            background-color: {GROUND};
+            color: {TEXT_FAINT};
+            border-color: {LINE_SOFT};
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 22px;
+            border-left: 1px solid {LINE};
+            background-color: {PLATE_LOW};
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }}
+        QComboBox::drop-down:hover {{
+            background-color: {LINE_SOFT};
+        }}
+        QComboBox::down-arrow {{
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {TEXT_MUTED};
+        }}
+        QComboBox::down-arrow:hover {{
+            border-top-color: {ICE};
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {PLATE};
+            color: {TEXT};
+            border: 1px solid {ICE};
+            selection-background-color: {LINE};
+            selection-color: {ICE};
+            padding: 2px;
+            outline: none;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 24px;
+            padding: 4px 8px;
+            border: none;
+        }}
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {LINE_SOFT};
+            color: {ICE};
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {LINE};
+            color: {ICE};
         }}
     """

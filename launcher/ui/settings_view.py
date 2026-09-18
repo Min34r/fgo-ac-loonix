@@ -429,15 +429,7 @@ class SettingsView(QWidget):
             "3840 x 2160 (16:9 4K UHD)",
             "1280 x 720 (720p Windowed)",
         ])
-        self.cmb_res.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 6px 12px;
-                font-size: 13px;
-            }}
-        """)
+        self.cmb_res.setFixedHeight(32)
         l_disp.addWidget(self.cmb_res)
 
         # Translation Group
@@ -603,7 +595,7 @@ class SettingsView(QWidget):
         grid_xi.addWidget(QLabel("Controller Index:"), 0, 0)
         self.cmb_ctrl_idx = QComboBox()
         self.cmb_ctrl_idx.addItems(["0 (Player 1 / Default)", "1 (Player 2)", "2 (Player 3)", "3 (Player 4)"])
-        self.cmb_ctrl_idx.setStyleSheet(f"background-color: {Theme.PLATE}; color: {Theme.TEXT}; padding: 4px 8px;")
+        self.cmb_ctrl_idx.setFixedHeight(28)
         grid_xi.addWidget(self.cmb_ctrl_idx, 0, 1)
 
         grid_xi.addWidget(QLabel("Stick Deadzone:"), 1, 0)
@@ -692,15 +684,7 @@ class SettingsView(QWidget):
             "NVIDIA High Definition Audio (HDMI)",
             "Analog Stereo Output",
         ])
-        self.cmb_audio_dev.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 6px 12px;
-                font-size: 13px;
-            }}
-        """)
+        self.cmb_audio_dev.setFixedHeight(32)
         l_aud.addWidget(self.cmb_audio_dev)
 
         self.sub_stack.addWidget(page_aud)

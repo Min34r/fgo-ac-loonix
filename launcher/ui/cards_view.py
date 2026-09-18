@@ -3,19 +3,22 @@ Cards View: Servant card catalog, sortie deck builder, and summon rates.
 """
 
 import json
+import math
 import os
 import shutil
 import subprocess
 from typing import List, Optional
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QMimeData, QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QDrag, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -36,9 +39,9 @@ from launcher.core.card_catalog import CardCatalog, CardInfo, DeckItem
 from launcher.ui.theme import Theme
 
 try:
-    from launcher.core.config import FGOA_ROOT, LOADOUTS_DIR
+    from launcher.core.config import CARD_FILTERS_FILE, FGOA_ROOT, LOADOUTS_DIR
 except ImportError:
-    from ..core.config import FGOA_ROOT, LOADOUTS_DIR
+    from ..core.config import CARD_FILTERS_FILE, FGOA_ROOT, LOADOUTS_DIR
 
 CARD_DIR = os.path.join(FGOA_ROOT, "DEVICE", "print", "FGO11_AllServants")
 
@@ -50,6 +53,7 @@ class CardTileWidget(QFrame):
     def __init__(self, card: CardInfo, parent=None):
         super().__init__(parent)
         self.card = card
+        self._drag_start_pos: Optional[QPoint] = None
         self.setFixedSize(148, 240)
         self.setStyleSheet(f"""
             QFrame {{
@@ -64,6 +68,7 @@ class CardTileWidget(QFrame):
             }}
         """)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"{card.name_en or card.name_jp}\n• Drag & drop onto deck shelf below to add\n• Double-click to change form / ascension / foil")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -104,10 +109,54 @@ class CardTileWidget(QFrame):
         layout.addWidget(self.lbl_sub)
         layout.addStretch()
 
+    def update_card(self, new_card: CardInfo):
+        self.card = new_card
+        if os.path.exists(new_card.image_path):
+            pix = QPixmap(new_card.image_path).scaled(
+                134, 160, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_img.setPixmap(pix)
+        else:
+            self.lbl_img.setText("No Img")
+
+        self.lbl_name_en.setText(new_card.name_en or new_card.name_jp or "Unknown")
+        stars = "★" * new_card.rarity if new_card.rarity > 0 else ""
+        class_str = new_card.class_name if new_card.class_name else "Craft"
+        fatal_badge = " [FATAL]" if new_card.is_holo else ""
+        self.lbl_sub.setText(f"{class_str}  {stars}{fatal_badge}")
+        self.lbl_sub.setStyleSheet(
+            f"color: {'#E5C07B' if new_card.is_holo else Theme.TEXT_SOFT}; "
+            f"font-size: 11px; font-weight: {'600' if new_card.is_holo else 'normal'};"
+        )
+        self.setToolTip(f"{new_card.name_en or new_card.name_jp}\n• Drag & drop onto deck shelf below to add\n• Double-click to change form / ascension / foil")
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
             self.clicked.emit(self.card)
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if not self._drag_start_pos:
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(f"fgo_card:{self.card.tc_id}")
+        drag.setMimeData(mime)
+
+        if os.path.exists(self.card.image_path):
+            pix = QPixmap(self.card.image_path).scaled(
+                70, 98, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            drag.setPixmap(pix)
+            drag.setHotSpot(QPoint(pix.width() // 2, pix.height() // 2))
+
+        drag.exec(Qt.DropAction.CopyAction)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -116,16 +165,15 @@ class CardTileWidget(QFrame):
 
 
 class CardVariantsDialog(QDialog):
-    """Dialog allowing user to choose ascension, foil type, and quantity (1-5)."""
+    """Dialog allowing user to choose ascension stage and foil type."""
 
     def __init__(self, base_card: CardInfo, catalog: CardCatalog, parent=None):
         super().__init__(parent)
         self.base_card = base_card
         self.catalog = catalog
         self.selected_variant: CardInfo = base_card
-        self.quantity: int = 1
 
-        self.setWindowTitle(f"Add Card - {base_card.name_en or base_card.name_jp}")
+        self.setWindowTitle(f"Card Art & Form - {base_card.name_en or base_card.name_jp}")
         self.setFixedWidth(520)
         self.setStyleSheet(f"""
             QDialog {{
@@ -136,12 +184,30 @@ class CardVariantsDialog(QDialog):
             QLabel {{
                 color: {Theme.TEXT};
             }}
-            QComboBox, QSpinBox {{
+            QComboBox {{
                 background-color: {Theme.PLATE};
                 color: {Theme.TEXT};
                 border: 1px solid {Theme.LINE};
-                padding: 6px;
+                border-radius: 3px;
+                padding: 6px 10px;
                 font-size: 13px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {Theme.PLATE};
+                color: {Theme.TEXT};
+                border: 1px solid {Theme.ICE};
+                selection-background-color: {Theme.LINE};
+                selection-color: {Theme.ICE};
+                padding: 2px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 26px;
+                padding: 4px 8px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {Theme.LINE_SOFT};
+                color: {Theme.ICE};
             }}
         """)
 
@@ -157,52 +223,216 @@ class CardVariantsDialog(QDialog):
         layout.addWidget(lbl_title)
         layout.addWidget(lbl_jp)
 
-        # Variant selection
-        lbl_variant = QLabel("Card Form / Ascension / Foil:")
-        lbl_variant.setStyleSheet(f"font-size: 13px; color: {Theme.TEXT_SOFT};")
+        # Center preview image & details
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(16)
+
+        self.lbl_preview = QLabel()
+        self.lbl_preview.setFixedSize(110, 150)
+        self.lbl_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_preview.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid {Theme.LINE};")
+        preview_row.addWidget(self.lbl_preview)
+
+        v_info = QVBoxLayout()
+        v_info.setSpacing(8)
+
+        lbl_variant = QLabel("Select Ascension Stage & Foil:")
+        lbl_variant.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT_SOFT};")
         self.cmb_variant = QComboBox()
+        self.cmb_variant.setFixedHeight(34)
 
         # Find all matching variants for this card_id (e.g. SVT00011)
         self.variants = [c for c in catalog.cards if c.card_id == base_card.card_id]
         if not self.variants:
             self.variants = [base_card]
 
-        for v in self.variants:
-            foil = "Holo/Fatal" if v.is_holo else "Normal"
+        init_idx = 0
+        for i, v in enumerate(self.variants):
+            foil = "Holo / Fatal" if v.is_holo else "Normal"
             asc = v.ascension if v.ascension else "Base"
-            self.cmb_variant.addItem(f"Form: {asc} ({foil}) - ID: {v.tc_id}", v)
+            self.cmb_variant.addItem(f"{asc} ({foil}) - ID: {v.tc_id}", v)
+            if v.tc_id == base_card.tc_id:
+                init_idx = i
 
-        layout.addWidget(lbl_variant)
-        layout.addWidget(self.cmb_variant)
+        self.cmb_variant.setCurrentIndex(init_idx)
+        self.cmb_variant.currentIndexChanged.connect(self._on_variant_changed)
 
-        # Quantity
-        lbl_qty = QLabel("Copies to add (1 to 5):")
-        lbl_qty.setStyleSheet(f"font-size: 13px; color: {Theme.TEXT_SOFT};")
-        self.spn_qty = QSpinBox()
-        self.spn_qty.setRange(1, 5)
-        self.spn_qty.setValue(1)
-        layout.addWidget(lbl_qty)
-        layout.addWidget(self.spn_qty)
+        v_info.addWidget(lbl_variant)
+        v_info.addWidget(self.cmb_variant)
 
+        self.lbl_details = QLabel()
+        self.lbl_details.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px; line-height: 1.4;")
+        v_info.addWidget(self.lbl_details)
+        v_info.addStretch()
+
+        preview_row.addLayout(v_info)
+        layout.addLayout(preview_row)
+
+        # Action buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setStyleSheet(Theme.SECONDARY_BUTTON)
+        btn_cancel.setFixedHeight(32)
         btn_cancel.clicked.connect(self.reject)
 
-        btn_add = QPushButton("Add to Deck")
-        btn_add.setStyleSheet(Theme.PRIMARY_BUTTON)
-        btn_add.clicked.connect(self._confirm)
+        btn_apply = QPushButton("Apply Art / Variant")
+        btn_apply.setStyleSheet(Theme.PRIMARY_BUTTON)
+        btn_apply.setFixedHeight(32)
+        btn_apply.clicked.connect(self._confirm)
 
         btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_apply)
         layout.addLayout(btn_row)
+
+        self._on_variant_changed()
+
+    def _on_variant_changed(self):
+        v = self.cmb_variant.currentData() or self.base_card
+        if os.path.exists(v.image_path):
+            pix = QPixmap(v.image_path).scaled(
+                110, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_preview.setPixmap(pix)
+        else:
+            self.lbl_preview.setText("No Art")
+
+        foil_text = "Holographic / Fatal Edition" if v.is_holo else "Standard Normal Card"
+        asc_text = v.ascension or "Base Form"
+        stars = "★" * v.rarity if v.rarity > 0 else ""
+        self.lbl_details.setText(f"Rarity: {stars} ({v.rarity} Star)\nClass: {v.class_name}\nForm: {asc_text}\nType: {foil_text}\nCard ID: {v.card_id} (#{v.tc_id})")
 
     def _confirm(self):
         self.selected_variant = self.cmb_variant.currentData() or self.base_card
-        self.quantity = self.spn_qty.value()
         self.accept()
+
+
+class DeckSlotWidget(QFrame):
+    double_clicked = pyqtSignal(int)  # slot index
+    remove_clicked = pyqtSignal(int)  # slot index
+
+    def __init__(self, index: int, deck_item: DeckItem, card_info: Optional[CardInfo], parent=None):
+        super().__init__(parent)
+        self.index = index
+        self.deck_item = deck_item
+        self.card_info = card_info
+        self.setFixedSize(68, 98)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Theme.PLATE};
+                border: 1px solid {Theme.LINE};
+            }}
+            QFrame:hover {{
+                border: 1px solid {Theme.ICE};
+            }}
+        """)
+        self.setToolTip(f"{card_info.name_en or card_info.name_jp if card_info else f'Card #{deck_item.tc_id}'}\n• Double-click to swap ascension / holo art\n• Click × to remove from deck")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        sl = QVBoxLayout(self)
+        sl.setContentsMargins(2, 2, 2, 2)
+        sl.setSpacing(2)
+
+        lbl_thumb = QLabel()
+        lbl_thumb.setFixedSize(62, 74)
+        lbl_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        if card_info and os.path.exists(card_info.image_path):
+            pix = QPixmap(card_info.image_path).scaled(
+                62, 74, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            lbl_thumb.setPixmap(pix)
+        else:
+            lbl_thumb.setText(f"#{index + 1}")
+
+        btn_rem = QPushButton("×")
+        btn_rem.setFixedHeight(16)
+        btn_rem.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {Theme.DANGER};
+                border: none;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {Theme.DANGER}22;
+            }}
+        """)
+        btn_rem.clicked.connect(lambda: self.remove_clicked.emit(self.index))
+
+        sl.addWidget(lbl_thumb)
+        sl.addWidget(btn_rem)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit(self.index)
+        super().mouseDoubleClickEvent(event)
+
+
+class DeckShelfScroll(QScrollArea):
+    card_dropped = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("fgo_card:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("fgo_card:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        text = event.mimeData().text()
+        if text.startswith("fgo_card:"):
+            try:
+                tc_id = int(text.split(":", 1)[1])
+                self.card_dropped.emit(tc_id)
+                event.acceptProposedAction()
+            except ValueError:
+                event.ignore()
+        else:
+            event.ignore()
+
+
+class DeckShelfContainer(QWidget):
+    card_dropped = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("fgo_card:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("fgo_card:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        text = event.mimeData().text()
+        if text.startswith("fgo_card:"):
+            try:
+                tc_id = int(text.split(":", 1)[1])
+                self.card_dropped.emit(tc_id)
+                event.acceptProposedAction()
+            except ValueError:
+                event.ignore()
+        else:
+            event.ignore()
 
 
 class CardsView(QWidget):
@@ -216,11 +446,15 @@ class CardsView(QWidget):
         self.catalog = CardCatalog()
         self.loaded_cards: List[CardInfo] = []
         self.deck_items: List[DeckItem] = []
-        self._display_limit: int = 120
+        self.current_page: int = 1
+        self.cards_per_page: int = 120
+        self.total_pages: int = 1
         self._filtered_cards: List[CardInfo] = []
+        self._is_loading_filters: bool = False
         os.makedirs(LOADOUTS_DIR, exist_ok=True)
 
         self._init_ui()
+        self._load_filter_state()
         self.reload_cards()
         self._refresh_loadouts_list()
 
@@ -291,7 +525,7 @@ class CardsView(QWidget):
                 font-size: 12px;
             }}
         """)
-        self.txt_search.textChanged.connect(self._apply_filter)
+        self.txt_search.textChanged.connect(self._on_search_text_changed)
         bar1.addWidget(self.txt_search, stretch=3)
 
         # Card Type: All, Servants, Craft Essences
@@ -300,15 +534,6 @@ class CardsView(QWidget):
         self.cmb_type.addItem("Servants (SVT)", "SVT")
         self.cmb_type.addItem("Craft Essences (CE)", "CE")
         self.cmb_type.setFixedHeight(30)
-        self.cmb_type.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.GROUND};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
         self.cmb_type.currentIndexChanged.connect(self._on_type_changed)
         bar1.addWidget(self.cmb_type)
 
@@ -318,16 +543,7 @@ class CardsView(QWidget):
         for cls_name in ["Saber", "Archer", "Lancer", "Rider", "Caster", "Assassin", "Berserker", "Extra"]:
             self.cmb_class.addItem(cls_name, cls_name)
         self.cmb_class.setFixedHeight(30)
-        self.cmb_class.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.GROUND};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
-        self.cmb_class.currentIndexChanged.connect(self._apply_filter)
+        self.cmb_class.currentIndexChanged.connect(self._on_filter_changed)
         bar1.addWidget(self.cmb_class)
 
         # Rarity
@@ -336,16 +552,7 @@ class CardsView(QWidget):
         for r in range(5, 0, -1):
             self.cmb_rarity.addItem(f"{r} Star ({'★'*r})", r)
         self.cmb_rarity.setFixedHeight(30)
-        self.cmb_rarity.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.GROUND};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
-        self.cmb_rarity.currentIndexChanged.connect(self._apply_filter)
+        self.cmb_rarity.currentIndexChanged.connect(self._on_filter_changed)
         bar1.addWidget(self.cmb_rarity)
 
         # Reset button
@@ -357,9 +564,9 @@ class CardsView(QWidget):
 
         filter_vlayout.addLayout(bar1)
 
-        # Row 2: Secondary Filters, Badges & Counter
+        # Row 2: Secondary Filters, Badges & Pagination
         bar2 = QHBoxLayout()
-        bar2.setSpacing(12)
+        bar2.setSpacing(10)
 
         lbl_foil = QLabel("Foil:")
         lbl_foil.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px;")
@@ -370,39 +577,90 @@ class CardsView(QWidget):
         self.cmb_foil.addItem("Normal Only", "NORMAL")
         self.cmb_foil.addItem("Fatal / Holo Only", "HOLO")
         self.cmb_foil.setFixedHeight(26)
-        self.cmb_foil.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.GROUND};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 2px 8px;
-                font-size: 12px;
-            }}
-        """)
-        self.cmb_foil.currentIndexChanged.connect(self._apply_filter)
+        self.cmb_foil.currentIndexChanged.connect(self._on_filter_changed)
         bar2.addWidget(self.cmb_foil)
 
         self.chk_owned = QCheckBox("Owned cards only")
         self.chk_owned.setStyleSheet(f"color: {Theme.TEXT}; font-size: 12px;")
-        self.chk_owned.toggled.connect(self._apply_filter)
+        self.chk_owned.toggled.connect(self._on_filter_changed)
         bar2.addWidget(self.chk_owned)
 
         self.chk_group = QCheckBox("Group variants (1 tile/card)")
         self.chk_group.setStyleSheet(f"color: {Theme.TEXT}; font-size: 12px;")
-        self.chk_group.toggled.connect(self._apply_filter)
+        self.chk_group.toggled.connect(self._on_filter_changed)
         bar2.addWidget(self.chk_group)
 
         bar2.addStretch()
 
-        self.lbl_results = QLabel("Showing 0 cards")
-        self.lbl_results.setStyleSheet(f"color: {Theme.ICE}; font-size: 12px; font-weight: 600;")
-        bar2.addWidget(self.lbl_results)
+        # Pagination Controls
+        btn_nav_style = f"""
+            QPushButton {{
+                background-color: {Theme.PLATE};
+                color: {Theme.TEXT};
+                font-size: 13px;
+                font-weight: 600;
+                border: 1px solid {Theme.LINE};
+                border-radius: 3px;
+                padding: 0px;
+            }}
+            QPushButton:hover {{
+                background-color: #23272E;
+                border-color: #3A414B;
+            }}
+            QPushButton:pressed {{
+                background-color: {Theme.GROUND};
+            }}
+            QPushButton:disabled {{
+                background-color: {Theme.GROUND};
+                color: {Theme.TEXT_FAINT};
+                border-color: {Theme.LINE_SOFT};
+            }}
+        """
 
-        self.btn_load_more = QPushButton("Show More (+120)")
-        self.btn_load_more.setStyleSheet(Theme.SECONDARY_BUTTON)
-        self.btn_load_more.setFixedHeight(26)
-        self.btn_load_more.clicked.connect(self._load_more_cards)
-        bar2.addWidget(self.btn_load_more)
+        self.btn_first = QPushButton("⏮")
+        self.btn_first.setToolTip("First Page")
+        self.btn_first.setStyleSheet(btn_nav_style)
+        self.btn_first.setFixedSize(28, 26)
+        self.btn_first.clicked.connect(self._go_first_page)
+        bar2.addWidget(self.btn_first)
+
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_prev.setToolTip("Previous Page")
+        self.btn_prev.setStyleSheet(Theme.SECONDARY_BUTTON)
+        self.btn_prev.setFixedHeight(26)
+        self.btn_prev.clicked.connect(self._go_prev_page)
+        bar2.addWidget(self.btn_prev)
+
+        self.lbl_page_info = QLabel("Page 1 of 1")
+        self.lbl_page_info.setStyleSheet(f"color: {Theme.TEXT}; font-size: 12px; font-weight: 600; padding: 0 4px;")
+        bar2.addWidget(self.lbl_page_info)
+
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_next.setToolTip("Next Page")
+        self.btn_next.setStyleSheet(Theme.SECONDARY_BUTTON)
+        self.btn_next.setFixedHeight(26)
+        self.btn_next.clicked.connect(self._go_next_page)
+        bar2.addWidget(self.btn_next)
+
+        self.btn_last = QPushButton("⏭")
+        self.btn_last.setToolTip("Last Page")
+        self.btn_last.setStyleSheet(btn_nav_style)
+        self.btn_last.setFixedSize(28, 26)
+        self.btn_last.clicked.connect(self._go_last_page)
+        bar2.addWidget(self.btn_last)
+
+        self.cmb_per_page = QComboBox()
+        self.cmb_per_page.addItem("60 / page", 60)
+        self.cmb_per_page.addItem("120 / page", 120)
+        self.cmb_per_page.addItem("240 / page", 240)
+        self.cmb_per_page.setCurrentIndex(1)  # Default 120
+        self.cmb_per_page.setFixedHeight(26)
+        self.cmb_per_page.currentIndexChanged.connect(self._on_per_page_changed)
+        bar2.addWidget(self.cmb_per_page)
+
+        self.lbl_results = QLabel("Showing 0 cards")
+        self.lbl_results.setStyleSheet(f"color: {Theme.ICE}; font-size: 12px; font-weight: 600; margin-left: 4px;")
+        bar2.addWidget(self.lbl_results)
 
         self.btn_reload = QPushButton("Reload")
         self.btn_reload.setStyleSheet(Theme.SECONDARY_BUTTON)
@@ -471,22 +729,8 @@ class CardsView(QWidget):
 
         self.cmb_loadouts = QComboBox()
         self.cmb_loadouts.setMinimumWidth(200)
+        self.cmb_loadouts.setFixedHeight(30)
         self.cmb_loadouts.setToolTip("Saved deck loadouts. Click Load to apply to the active sortie deck.")
-        self.cmb_loadouts.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.PLATE_LOW};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.TEXT};
-                padding: 4px 10px;
-                font-size: 13px;
-                border-radius: 3px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                selection-background-color: {Theme.LINE};
-            }}
-        """)
         row_loadouts.addWidget(self.cmb_loadouts)
 
         self.btn_save_as = QPushButton("Save as")
@@ -520,18 +764,21 @@ class CardsView(QWidget):
 
         shelf_vlayout.addLayout(row_loadouts)
 
-        # Row 3: 30-Card Slot Shelf
-        self.shelf_scroll = QScrollArea()
-        self.shelf_scroll.setFixedHeight(120)
+        # Row 3: 30-Card Slot Shelf with Vertical Scrolling Grid
+        self.shelf_scroll = DeckShelfScroll()
+        self.shelf_scroll.setFixedHeight(170)
         self.shelf_scroll.setWidgetResizable(True)
-        self.shelf_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.shelf_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.shelf_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.shelf_scroll.setStyleSheet(f"background-color: {Theme.GROUND}; border: 1px solid {Theme.LINE};")
+        self.shelf_scroll.card_dropped.connect(self._on_card_dropped)
 
-        self.shelf_widget = QWidget()
-        self.shelf_layout = QHBoxLayout(self.shelf_widget)
-        self.shelf_layout.setContentsMargins(8, 6, 8, 6)
+        self.shelf_widget = DeckShelfContainer()
+        self.shelf_widget.card_dropped.connect(self._on_card_dropped)
+        self.shelf_layout = QGridLayout(self.shelf_widget)
+        self.shelf_layout.setContentsMargins(8, 8, 8, 8)
         self.shelf_layout.setSpacing(6)
-        self.shelf_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.shelf_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.shelf_scroll.setWidget(self.shelf_widget)
 
         shelf_vlayout.addWidget(self.shelf_scroll)
@@ -560,19 +807,122 @@ class CardsView(QWidget):
         self._refresh_deck_ui()
 
     # -----------------------------------------------------------------
+    # Filter State Persistence
+    # -----------------------------------------------------------------
+    def _load_filter_state(self):
+        if not os.path.exists(CARD_FILTERS_FILE):
+            return
+        try:
+            with open(CARD_FILTERS_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            self._is_loading_filters = True
+
+            self.txt_search.blockSignals(True)
+            self.cmb_type.blockSignals(True)
+            self.cmb_class.blockSignals(True)
+            self.cmb_rarity.blockSignals(True)
+            self.cmb_foil.blockSignals(True)
+            self.chk_owned.blockSignals(True)
+            self.chk_group.blockSignals(True)
+            self.cmb_per_page.blockSignals(True)
+
+            if "query" in state and isinstance(state["query"], str):
+                self.txt_search.setText(state["query"])
+
+            if "card_type" in state:
+                idx = self.cmb_type.findData(state["card_type"])
+                if idx >= 0:
+                    self.cmb_type.setCurrentIndex(idx)
+                self.cmb_class.setEnabled(state["card_type"] != "CE")
+
+            if "class_name" in state:
+                idx = self.cmb_class.findData(state["class_name"])
+                if idx >= 0:
+                    self.cmb_class.setCurrentIndex(idx)
+
+            if "rarity" in state:
+                idx = self.cmb_rarity.findData(int(state["rarity"]))
+                if idx >= 0:
+                    self.cmb_rarity.setCurrentIndex(idx)
+
+            if "foil" in state:
+                idx = self.cmb_foil.findData(state["foil"])
+                if idx >= 0:
+                    self.cmb_foil.setCurrentIndex(idx)
+
+            if "owned_only" in state:
+                self.chk_owned.setChecked(bool(state["owned_only"]))
+
+            if "group_variants" in state:
+                self.chk_group.setChecked(bool(state["group_variants"]))
+
+            if "per_page" in state:
+                idx = self.cmb_per_page.findData(int(state["per_page"]))
+                if idx >= 0:
+                    self.cmb_per_page.setCurrentIndex(idx)
+                    self.cards_per_page = int(state["per_page"])
+
+            if "page" in state:
+                self.current_page = max(1, int(state["page"]))
+
+        except Exception as e:
+            print(f"[CardsView] Error loading filter state: {e}")
+        finally:
+            self.txt_search.blockSignals(False)
+            self.cmb_type.blockSignals(False)
+            self.cmb_class.blockSignals(False)
+            self.cmb_rarity.blockSignals(False)
+            self.cmb_foil.blockSignals(False)
+            self.chk_owned.blockSignals(False)
+            self.chk_group.blockSignals(False)
+            self.cmb_per_page.blockSignals(False)
+            self._is_loading_filters = False
+
+    def _save_filter_state(self):
+        if self._is_loading_filters:
+            return
+        try:
+            os.makedirs(os.path.dirname(CARD_FILTERS_FILE), exist_ok=True)
+            state = {
+                "query": self.txt_search.text(),
+                "card_type": self.cmb_type.currentData() or "ALL",
+                "class_name": self.cmb_class.currentData() or "ALL",
+                "rarity": int(self.cmb_rarity.currentData() or 0),
+                "foil": self.cmb_foil.currentData() or "ALL",
+                "owned_only": self.chk_owned.isChecked(),
+                "group_variants": self.chk_group.isChecked(),
+                "per_page": int(self.cmb_per_page.currentData() or 120),
+                "page": self.current_page,
+            }
+            with open(CARD_FILTERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            print(f"[CardsView] Error saving filter state: {e}")
+
+    # -----------------------------------------------------------------
     # Catalog Browsing & Card Addition
     # -----------------------------------------------------------------
     def reload_cards(self):
         self.catalog = CardCatalog()
         self.loaded_cards = self.catalog.get_all_cards()
-        self._apply_filter()
+        self._apply_filter(keep_page=True)
+
+    def _on_search_text_changed(self):
+        self.current_page = 1
+        self._apply_filter(keep_page=False)
 
     def _on_type_changed(self):
         c_type = self.cmb_type.currentData() or "ALL"
         self.cmb_class.setEnabled(c_type != "CE")
-        self._apply_filter()
+        self.current_page = 1
+        self._apply_filter(keep_page=False)
+
+    def _on_filter_changed(self):
+        self.current_page = 1
+        self._apply_filter(keep_page=False)
 
     def _reset_filters(self):
+        self._is_loading_filters = True
         self.txt_search.blockSignals(True)
         self.cmb_type.blockSignals(True)
         self.cmb_class.blockSignals(True)
@@ -580,6 +930,7 @@ class CardsView(QWidget):
         self.cmb_foil.blockSignals(True)
         self.chk_owned.blockSignals(True)
         self.chk_group.blockSignals(True)
+        self.cmb_per_page.blockSignals(True)
 
         self.txt_search.clear()
         self.cmb_type.setCurrentIndex(0)
@@ -589,6 +940,9 @@ class CardsView(QWidget):
         self.cmb_foil.setCurrentIndex(0)
         self.chk_owned.setChecked(False)
         self.chk_group.setChecked(False)
+        self.cmb_per_page.setCurrentIndex(1)  # 120
+        self.cards_per_page = 120
+        self.current_page = 1
 
         self.txt_search.blockSignals(False)
         self.cmb_type.blockSignals(False)
@@ -597,15 +951,12 @@ class CardsView(QWidget):
         self.cmb_foil.blockSignals(False)
         self.chk_owned.blockSignals(False)
         self.chk_group.blockSignals(False)
+        self.cmb_per_page.blockSignals(False)
+        self._is_loading_filters = False
 
-        self._display_limit = 120
-        self._apply_filter()
+        self._apply_filter(keep_page=False)
 
-    def _load_more_cards(self):
-        self._display_limit += 120
-        self._apply_filter()
-
-    def _apply_filter(self):
+    def _apply_filter(self, keep_page: bool = False):
         query = self.txt_search.text().strip()
         c_type = self.cmb_type.currentData() or "ALL"
         c_class = self.cmb_class.currentData() or "ALL"
@@ -625,35 +976,100 @@ class CardsView(QWidget):
         )
 
         total_matches = len(self._filtered_cards)
-        display_cards = self._filtered_cards[:self._display_limit]
-        shown_count = len(display_cards)
+        self.total_pages = max(1, math.ceil(total_matches / self.cards_per_page))
+
+        if not keep_page:
+            self.current_page = 1
+        else:
+            self.current_page = max(1, min(self.current_page, self.total_pages))
+
+        self._render_current_page()
+
+    def _render_current_page(self):
+        total_matches = len(self._filtered_cards)
+        self.total_pages = max(1, math.ceil(total_matches / self.cards_per_page))
+        self.current_page = max(1, min(self.current_page, self.total_pages))
+
+        start_idx = (self.current_page - 1) * self.cards_per_page
+        end_idx = min(start_idx + self.cards_per_page, total_matches)
+        display_cards = self._filtered_cards[start_idx:end_idx]
 
         self.catalog_list.clear()
         for card in display_cards:
             tile = CardTileWidget(card)
-            tile.clicked.connect(self._quick_add_card)
-            tile.double_clicked.connect(self._open_variant_dialog)
+            tile.double_clicked.connect(lambda c, t=tile: self._on_catalog_tile_double_clicked(c, t))
 
             item = QListWidgetItem(self.catalog_list)
             item.setSizeHint(QSize(152, 244))
             self.catalog_list.addItem(item)
             self.catalog_list.setItemWidget(item, tile)
 
-        if total_matches > shown_count:
-            self.lbl_results.setText(f"Showing {shown_count} of {total_matches} cards")
-            self.btn_load_more.setVisible(True)
-            self.btn_load_more.setText(f"Show More (+120 of {total_matches - shown_count} left)")
+        # Scroll catalog back to top on page render
+        self.scroll_catalog.verticalScrollBar().setValue(0)
+        self.catalog_list.verticalScrollBar().setValue(0)
+
+        # Update pagination display
+        self.lbl_page_info.setText(f"Page {self.current_page} of {self.total_pages}")
+        if total_matches > 0:
+            self.lbl_results.setText(f"Showing {start_idx + 1:,}–{end_idx:,} of {total_matches:,} cards")
         else:
-            self.lbl_results.setText(f"Showing {shown_count} cards")
-            self.btn_load_more.setVisible(False)
+            self.lbl_results.setText("No matching cards")
 
-    def _quick_add_card(self, card: CardInfo):
-        self._add_card_copies(card, 1)
+        self.btn_first.setEnabled(self.current_page > 1)
+        self.btn_prev.setEnabled(self.current_page > 1)
+        self.btn_next.setEnabled(self.current_page < self.total_pages)
+        self.btn_last.setEnabled(self.current_page < self.total_pages)
 
-    def _open_variant_dialog(self, card: CardInfo):
+        self._save_filter_state()
+
+    def _go_first_page(self):
+        if self.current_page != 1:
+            self.current_page = 1
+            self._render_current_page()
+
+    def _go_prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self._render_current_page()
+
+    def _go_next_page(self):
+        if self.current_page < self.total_pages:
+            self.current_page += 1
+            self._render_current_page()
+
+    def _go_last_page(self):
+        if self.current_page != self.total_pages:
+            self.current_page = self.total_pages
+            self._render_current_page()
+
+    def _on_per_page_changed(self):
+        self.cards_per_page = int(self.cmb_per_page.currentData() or 120)
+        self.current_page = 1
+        self._render_current_page()
+
+    def _on_catalog_tile_double_clicked(self, card: CardInfo, tile: CardTileWidget):
         dlg = CardVariantsDialog(card, self.catalog, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._add_card_copies(dlg.selected_variant, dlg.quantity)
+            tile.update_card(dlg.selected_variant)
+
+    def _on_card_dropped(self, tc_id: int):
+        card = self.catalog.get_card_by_id(tc_id)
+        if card:
+            self._add_card_copies(card, 1)
+
+    def _on_deck_slot_double_clicked(self, index: int):
+        if 0 <= index < len(self.deck_items):
+            deck_item = self.deck_items[index]
+            base_card = self.catalog.get_card_by_id(deck_item.tc_id)
+            if not base_card:
+                return
+            dlg = CardVariantsDialog(base_card, self.catalog, self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                new_v = dlg.selected_variant
+                self.deck_items[index] = DeckItem(tc_id=new_v.tc_id, count=1, card_info=new_v, card=new_v)
+                self.catalog.save_deck(self.deck_items)
+                self._refresh_deck_ui()
+                self.deck_changed.emit()
 
     def _add_card_copies(self, card: CardInfo, count: int):
         if len(self.deck_items) >= 30:
@@ -685,46 +1101,16 @@ class CardsView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+        cols = 10
         for idx, deck_item in enumerate(self.deck_items):
-            slot = QFrame()
-            slot.setFixedSize(68, 98)
-            slot.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid {Theme.LINE};")
-            sl = QVBoxLayout(slot)
-            sl.setContentsMargins(2, 2, 2, 2)
-            sl.setSpacing(2)
-
-            lbl_thumb = QLabel()
-            lbl_thumb.setFixedSize(62, 74)
-            lbl_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row = idx // cols
+            col = idx % cols
 
             card_info = self.catalog.get_card_by_id(deck_item.tc_id)
-            if card_info and os.path.exists(card_info.image_path):
-                pix = QPixmap(card_info.image_path).scaled(
-                    62, 74, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                lbl_thumb.setPixmap(pix)
-            else:
-                lbl_thumb.setText(f"#{idx+1}")
-
-            btn_rem = QPushButton("×")
-            btn_rem.setFixedHeight(16)
-            btn_rem.setStyleSheet(f"""
-                QPushButton {{
-                    background: transparent;
-                    color: {Theme.DANGER};
-                    border: none;
-                    font-size: 12px;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{
-                    background: {Theme.DANGER}22;
-                }}
-            """)
-            btn_rem.clicked.connect(lambda _, i=idx: self._remove_from_deck(i))
-
-            sl.addWidget(lbl_thumb)
-            sl.addWidget(btn_rem)
-            self.shelf_layout.addWidget(slot)
+            slot = DeckSlotWidget(idx, deck_item, card_info)
+            slot.remove_clicked.connect(self._remove_from_deck)
+            slot.double_clicked.connect(self._on_deck_slot_double_clicked)
+            self.shelf_layout.addWidget(slot, row, col)
 
     def _remove_from_deck(self, index: int):
         if 0 <= index < len(self.deck_items):
