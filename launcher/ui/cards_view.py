@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from launcher.core.card_catalog import CardCatalog, CardInfo, DeckItem
-from launcher.ui.theme import Theme
+from launcher.ui.theme import Theme, OpaqueComboBox
 
 try:
     from launcher.core.config import CARD_FILTERS_FILE, FGOA_ROOT, LOADOUTS_DIR
@@ -184,31 +184,6 @@ class CardVariantsDialog(QDialog):
             QLabel {{
                 color: {Theme.TEXT};
             }}
-            QComboBox {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.LINE};
-                border-radius: 3px;
-                padding: 6px 10px;
-                font-size: 13px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.ICE};
-                selection-background-color: {Theme.LINE};
-                selection-color: {Theme.ICE};
-                padding: 2px;
-                outline: none;
-            }}
-            QComboBox QAbstractItemView::item {{
-                min-height: 26px;
-                padding: 4px 8px;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background-color: {Theme.LINE_SOFT};
-                color: {Theme.ICE};
-            }}
         """)
 
         layout = QVBoxLayout(self)
@@ -238,7 +213,7 @@ class CardVariantsDialog(QDialog):
 
         lbl_variant = QLabel("Select Ascension Stage & Foil:")
         lbl_variant.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT_SOFT};")
-        self.cmb_variant = QComboBox()
+        self.cmb_variant = OpaqueComboBox()
         self.cmb_variant.setFixedHeight(34)
 
         # Find all matching variants for this card_id (e.g. SVT00011)
@@ -373,10 +348,15 @@ class DeckSlotWidget(QFrame):
 
 class DeckShelfScroll(QScrollArea):
     card_dropped = pyqtSignal(int)
+    resized = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.resized.emit()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasText() and event.mimeData().text().startswith("fgo_card:"):
@@ -451,6 +431,8 @@ class CardsView(QWidget):
         self.total_pages: int = 1
         self._filtered_cards: List[CardInfo] = []
         self._is_loading_filters: bool = False
+        self.deck_slot_widgets: List[DeckSlotWidget] = []
+        self._current_deck_cols: int = 10
         os.makedirs(LOADOUTS_DIR, exist_ok=True)
 
         self._init_ui()
@@ -529,7 +511,7 @@ class CardsView(QWidget):
         bar1.addWidget(self.txt_search, stretch=3)
 
         # Card Type: All, Servants, Craft Essences
-        self.cmb_type = QComboBox()
+        self.cmb_type = OpaqueComboBox()
         self.cmb_type.addItem("All Types", "ALL")
         self.cmb_type.addItem("Servants (SVT)", "SVT")
         self.cmb_type.addItem("Craft Essences (CE)", "CE")
@@ -538,7 +520,7 @@ class CardsView(QWidget):
         bar1.addWidget(self.cmb_type)
 
         # Servant Class
-        self.cmb_class = QComboBox()
+        self.cmb_class = OpaqueComboBox()
         self.cmb_class.addItem("All Classes", "ALL")
         for cls_name in ["Saber", "Archer", "Lancer", "Rider", "Caster", "Assassin", "Berserker", "Extra"]:
             self.cmb_class.addItem(cls_name, cls_name)
@@ -547,7 +529,7 @@ class CardsView(QWidget):
         bar1.addWidget(self.cmb_class)
 
         # Rarity
-        self.cmb_rarity = QComboBox()
+        self.cmb_rarity = OpaqueComboBox()
         self.cmb_rarity.addItem("All Rarities", 0)
         for r in range(5, 0, -1):
             self.cmb_rarity.addItem(f"{r} Star ({'★'*r})", r)
@@ -572,7 +554,7 @@ class CardsView(QWidget):
         lbl_foil.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px;")
         bar2.addWidget(lbl_foil)
 
-        self.cmb_foil = QComboBox()
+        self.cmb_foil = OpaqueComboBox()
         self.cmb_foil.addItem("All Foils", "ALL")
         self.cmb_foil.addItem("Normal Only", "NORMAL")
         self.cmb_foil.addItem("Fatal / Holo Only", "HOLO")
@@ -649,7 +631,7 @@ class CardsView(QWidget):
         self.btn_last.clicked.connect(self._go_last_page)
         bar2.addWidget(self.btn_last)
 
-        self.cmb_per_page = QComboBox()
+        self.cmb_per_page = OpaqueComboBox()
         self.cmb_per_page.addItem("60 / page", 60)
         self.cmb_per_page.addItem("120 / page", 120)
         self.cmb_per_page.addItem("240 / page", 240)
@@ -727,7 +709,7 @@ class CardsView(QWidget):
         lbl_loadouts.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px; font-weight: 500;")
         row_loadouts.addWidget(lbl_loadouts)
 
-        self.cmb_loadouts = QComboBox()
+        self.cmb_loadouts = OpaqueComboBox()
         self.cmb_loadouts.setMinimumWidth(200)
         self.cmb_loadouts.setFixedHeight(30)
         self.cmb_loadouts.setToolTip("Saved deck loadouts. Click Load to apply to the active sortie deck.")
@@ -764,14 +746,14 @@ class CardsView(QWidget):
 
         shelf_vlayout.addLayout(row_loadouts)
 
-        # Row 3: 30-Card Slot Shelf with Vertical Scrolling Grid
+        # Row 3: 30-Card Slot Shelf with Responsive Reflow & Height
         self.shelf_scroll = DeckShelfScroll()
-        self.shelf_scroll.setFixedHeight(170)
         self.shelf_scroll.setWidgetResizable(True)
         self.shelf_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.shelf_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.shelf_scroll.setStyleSheet(f"background-color: {Theme.GROUND}; border: 1px solid {Theme.LINE};")
         self.shelf_scroll.card_dropped.connect(self._on_card_dropped)
+        self.shelf_scroll.resized.connect(self._reflow_deck_slots)
 
         self.shelf_widget = DeckShelfContainer()
         self.shelf_widget.card_dropped.connect(self._on_card_dropped)
@@ -1091,6 +1073,32 @@ class CardsView(QWidget):
         self._refresh_deck_ui()
         self.deck_changed.emit()
 
+    def _calc_deck_columns(self) -> int:
+        vp_w = self.shelf_scroll.viewport().width()
+        col_w = 68 + 6  # DeckSlotWidget width + spacing
+        if vp_w <= 100:
+            vp_w = self.width() - 80 if self.width() > 200 else 1150
+        return max(5, (vp_w - 16) // col_w)
+
+    def _update_shelf_height(self, count: int, cols: int):
+        rows = (count + cols - 1) // cols if count > 0 else 1
+        needed_h = 16 + rows * 98 + max(0, rows - 1) * 6
+        target_h = max(116, min(224, needed_h))
+        self.shelf_scroll.setFixedHeight(target_h)
+
+    def _reflow_deck_slots(self):
+        if not hasattr(self, "deck_slot_widgets") or not self.deck_slot_widgets:
+            return
+        cols = self._calc_deck_columns()
+        if cols == self._current_deck_cols:
+            return
+        self._current_deck_cols = cols
+        for idx, slot in enumerate(self.deck_slot_widgets):
+            r = idx // cols
+            c = idx % cols
+            self.shelf_layout.addWidget(slot, r, c)
+        self._update_shelf_height(len(self.deck_slot_widgets), cols)
+
     def _refresh_deck_ui(self):
         self.deck_items = self.catalog.load_deck()
         self.lbl_deck_count.setText(f"Deck ({len(self.deck_items)} / 30)")
@@ -1101,7 +1109,18 @@ class CardsView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        cols = 10
+        self.deck_slot_widgets = []
+        cols = self._calc_deck_columns()
+        self._current_deck_cols = cols
+
+        if not self.deck_items:
+            lbl_empty = QLabel("Drag & drop cards from the catalog above to build your 30-card sortie deck")
+            lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_empty.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 13px; padding: 26px;")
+            self.shelf_layout.addWidget(lbl_empty, 0, 0, 1, cols)
+            self._update_shelf_height(0, cols)
+            return
+
         for idx, deck_item in enumerate(self.deck_items):
             row = idx // cols
             col = idx % cols
@@ -1111,6 +1130,9 @@ class CardsView(QWidget):
             slot.remove_clicked.connect(self._remove_from_deck)
             slot.double_clicked.connect(self._on_deck_slot_double_clicked)
             self.shelf_layout.addWidget(slot, row, col)
+            self.deck_slot_widgets.append(slot)
+
+        self._update_shelf_height(len(self.deck_items), cols)
 
     def _remove_from_deck(self, index: int):
         if 0 <= index < len(self.deck_items):

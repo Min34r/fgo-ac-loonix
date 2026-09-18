@@ -1,6 +1,4 @@
-"""
-UI Theme: Authentic colors, styles, and typography from Scooby cabinet design.
-"""
+from PyQt6.QtWidgets import QComboBox
 
 
 class Theme:
@@ -264,3 +262,51 @@ class Theme:
             color: {ICE};
         }}
     """
+
+
+class OpaqueComboBox(QComboBox):
+    """
+    QComboBox that guarantees an opaque solid background for both the closed widget
+    and the popup list across Wayland and X11 compositors under Qt6.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(Theme.COMBOBOX)
+        self._ensure_opaque_popup()
+
+    def _ensure_opaque_popup(self):
+        view = self.view()
+        if view:
+            view.setAutoFillBackground(True)
+            view.setStyleSheet(f"""
+                QAbstractItemView {{
+                    background-color: {Theme.PLATE};
+                    color: {Theme.TEXT};
+                    border: 1px solid {Theme.ICE};
+                    selection-background-color: {Theme.LINE};
+                    selection-color: {Theme.ICE};
+                    outline: none;
+                }}
+                QAbstractItemView::item {{
+                    min-height: 24px;
+                    padding: 4px 8px;
+                }}
+                QAbstractItemView::item:hover {{
+                    background-color: {Theme.LINE_SOFT};
+                    color: {Theme.ICE};
+                }}
+                QAbstractItemView::item:selected {{
+                    background-color: {Theme.LINE};
+                    color: {Theme.ICE};
+                }}
+            """)
+            container = view.parentWidget()
+            if container:
+                container.setAutoFillBackground(True)
+                container.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid {Theme.ICE};")
+
+    def showPopup(self):
+        super().showPopup()
+        self._ensure_opaque_popup()
+

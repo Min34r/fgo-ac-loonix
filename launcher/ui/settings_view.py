@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from launcher.ui.theme import Theme
+from launcher.ui.theme import Theme, OpaqueComboBox
 
 try:
     from launcher.core.config import FGOA_ROOT
@@ -421,7 +421,7 @@ class SettingsView(QWidget):
         lbl_res.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {Theme.TEXT}; margin-top: 10px;")
         l_disp.addWidget(lbl_res)
 
-        self.cmb_res = QComboBox()
+        self.cmb_res = OpaqueComboBox()
         self.cmb_res.setFixedWidth(280)
         self.cmb_res.addItems([
             "1920 x 1080 (Native FGO Arcade)",
@@ -593,7 +593,7 @@ class SettingsView(QWidget):
         grid_xi.setSpacing(12)
 
         grid_xi.addWidget(QLabel("Controller Index:"), 0, 0)
-        self.cmb_ctrl_idx = QComboBox()
+        self.cmb_ctrl_idx = OpaqueComboBox()
         self.cmb_ctrl_idx.addItems(["0 (Player 1 / Default)", "1 (Player 2)", "2 (Player 3)", "3 (Player 4)"])
         self.cmb_ctrl_idx.setFixedHeight(28)
         grid_xi.addWidget(self.cmb_ctrl_idx, 0, 1)
@@ -677,7 +677,7 @@ class SettingsView(QWidget):
         lbl_aud_head.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {Theme.TEXT};")
         l_aud.addWidget(lbl_aud_head)
 
-        self.cmb_audio_dev = QComboBox()
+        self.cmb_audio_dev = OpaqueComboBox()
         self.cmb_audio_dev.setFixedWidth(360)
         self.cmb_audio_dev.addItems([
             "Default System Output (PipeWire / PulseAudio)",

@@ -1,0 +1,12 @@
+post_install() {
+    echo ":: Fate/Grand Order Arcade Launcher installed to /opt/fgoa-launcher."
+    echo ":: To bind the launcher overlay to an existing FGO Arcade game folder, run:"
+    echo "::   cd /path/to/FGOA && /opt/fgoa-launcher/install.sh"
+    echo ":: Or launch directly from your game directory with: fgo-launcher"
+    echo ":: Ensure 192.168.100.1 is configured on your loopback device:"
+    echo "::   sudo ip addr add 192.168.100.1/24 dev lo"
+}
+
+post_upgrade() {
+    post_install
+}

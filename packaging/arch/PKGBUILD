@@ -1,0 +1,62 @@
+# Maintainer: FGOA Linux Orchestration Team
+
+pkgname=fgo-arcade-launcher
+pkgver=1.1.2
+pkgrel=1
+pkgdesc="Native Linux launcher and runtime orchestration overlay for Fate/Grand Order Arcade"
+arch=('any')
+url="https://github.com/Min34r/fgo-ac-loonix"
+license=('MIT')
+depends=(
+    'python'
+    'python-pyqt6'
+    'python-yaml'
+    'wine'
+    'mariadb'
+    'iproute2'
+)
+optdepends=(
+    'mangohud: HUD performance and frame time overlay'
+    'wine-staging: Recommended Wine build with staging patches'
+    'noto-fonts-cjk: High quality Japanese/CJK font rendering'
+)
+install=fgo-arcade-launcher.install
+source=(
+    "fgo-arcade-launcher.desktop"
+)
+sha256sums=(
+    'SKIP'
+)
+
+package() {
+    local src_dir="${startdir}/../.."
+
+    install -d "${pkgdir}/opt/fgoa-launcher"
+    install -d "${pkgdir}/usr/bin"
+    install -d "${pkgdir}/usr/share/applications"
+    install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"
+    install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+
+    # Install launcher files
+    cp -r "${src_dir}/launcher" "${pkgdir}/opt/fgoa-launcher/"
+    cp -r "${src_dir}/scripts" "${pkgdir}/opt/fgoa-launcher/"
+    cp -r "${src_dir}/assets" "${pkgdir}/opt/fgoa-launcher/"
+    cp -r "${src_dir}/deck-loadouts" "${pkgdir}/opt/fgoa-launcher/"
+    install -m755 "${src_dir}/FGO_Launcher.sh" "${pkgdir}/opt/fgoa-launcher/"
+    install -m755 "${src_dir}/install.sh" "${pkgdir}/opt/fgoa-launcher/"
+    install -m644 "${src_dir}/requirements.txt" "${pkgdir}/opt/fgoa-launcher/"
+
+    # Wrapper script in /usr/bin/fgo-launcher
+    cat << 'WRAPPER' > "${pkgdir}/usr/bin/fgo-launcher"
+#!/usr/bin/env bash
+exec /opt/fgoa-launcher/FGO_Launcher.sh "$@"
+WRAPPER
+    chmod 755 "${pkgdir}/usr/bin/fgo-launcher"
+
+    # Desktop entry & Icon
+    install -m644 "${srcdir}/fgo-arcade-launcher.desktop" "${pkgdir}/usr/share/applications/"
+    install -m644 "${src_dir}/launcher/assets/platform.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/fgo-arcade.png"
+
+    # License
+    install -m644 "${src_dir}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

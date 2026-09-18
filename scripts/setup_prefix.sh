@@ -39,9 +39,7 @@ echo "  [OK] Wine prefix created at: ${TARGET_PREFIX}"
 echo "[3/4] Configuring Wine DLL overrides..."
 # Critical: opengl32=native,builtin so Sega's local opengl32 shim is used instead of system driver
 wine reg add "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "opengl32" /t REG_SZ /d "native,builtin" /f >/dev/null 2>&1 || true
-wine reg add "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "d3d11" /t REG_SZ /d "native,builtin" /f >/dev/null 2>&1 || true
-wine reg add "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "dxgi" /t REG_SZ /d "native,builtin" /f >/dev/null 2>&1 || true
-echo "  [OK] Registered DLL overrides: opengl32=n,b, d3d11=n,b, dxgi=n,b"
+echo "  [OK] Registered DLL overrides: opengl32=n,b"
 
 # 4. Optional Winetricks Enhancement (CJK Fonts & MSVC Runtime)
 echo "[4/4] Checking winetricks for fonts and runtime..."

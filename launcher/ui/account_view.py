@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from launcher.ui.theme import Theme
+from launcher.ui.theme import Theme, OpaqueComboBox
 
 try:
     from launcher.core.config import FGOA_ROOT
@@ -104,31 +104,6 @@ class NewAccountDialog(QDialog):
             QLineEdit:focus {{
                 border-color: {Theme.ICE};
             }}
-            QComboBox {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 13px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.ICE};
-                selection-background-color: {Theme.LINE};
-                selection-color: {Theme.ICE};
-                padding: 2px;
-                outline: none;
-            }}
-            QComboBox QAbstractItemView::item {{
-                min-height: 24px;
-                padding: 4px 8px;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background-color: {Theme.LINE_SOFT};
-                color: {Theme.ICE};
-            }}
         """)
 
         layout = QVBoxLayout(self)
@@ -143,7 +118,7 @@ class NewAccountDialog(QDialog):
 
         lbl_mode = QLabel("Account mode")
         lbl_mode.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px;")
-        self.cmb_mode = QComboBox()
+        self.cmb_mode = OpaqueComboBox()
         self.cmb_mode.addItem("normal - Standard account (starting resources)", "normal")
 
         lbl_help = QLabel(
@@ -254,27 +229,9 @@ class AccountView(QWidget):
         lbl_select = QLabel("Select:")
         lbl_select.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px;")
 
-        self.account_combo = QComboBox()
+        self.account_combo = OpaqueComboBox()
         self.account_combo.setMinimumWidth(260)
-        self.account_combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {Theme.PLATE};
-                color: {Theme.TEXT};
-                border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 13px;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Theme.PLATE_LOW};
-                color: {Theme.TEXT};
-                selection-background-color: {Theme.LINE};
-            }}
-        """)
+        self.account_combo.setFixedHeight(32)
         self.account_combo.currentIndexChanged.connect(self._on_account_selected)
 
         self.btn_use = QPushButton("Use Selected Account")

@@ -3,6 +3,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![GUI](https://img.shields.io/badge/GUI-PyQt6-brightgreen.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Wayland%20%7C%20X11-orange.svg)](https://kernel.org/)
+[![Packaging](https://img.shields.io/badge/arch%20linux-PKGBUILD-blue.svg)](packaging/arch/PKGBUILD)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 
 A high-performance, native Linux launcher and runtime orchestration overlay for **Fate/Grand Order Arcade**. Engineered as a **straight-up 1:1 Linux port of Scooby's launcher UI design** ([githubuser420x/FGOAC-scooby](https://github.com/githubuser420x/FGOAC-scooby)) rebuilt natively in Python and PyQt6 to attach directly onto **Cloud23333's FGO Arcade rip**, providing a seamless native desktop arcade experience without Windows or virtual machines.
@@ -13,20 +14,15 @@ A high-performance, native Linux launcher and runtime orchestration overlay for 
 
 - **1:1 Port of Scooby's Arcade Cabinet Aesthetic**: Direct 1:1 recreation of Scooby's WPF launcher theme featuring 45-degree chamfered geometry, responsive cyan glows, and crisp typography.
 - **On-Demand Embedded Server Stack**: Auto-starts local MariaDB (port 3307) and Artemis server (ports 8777, 8443, 22345) when launching the game, and automatically shuts them down on exit—zero background overhead when not playing.
-- **One-Click Translation Downloader**: Built-in button in Settings to automatically fetch, verify SHA256, and deploy the English translation package (`zh/fgozh.dll` + sprites) directly from GitHub.
-- **Card Catalog & Deck Builder**: Visual browser covering 3,700+ card artwork bitmaps. Includes ascension stages, Fatal (foil) variants, multi-copy selection, and an interactive 30-slot deck shelf.
-- **Deck Loadout Management**: Save, load, export, and import multiple team compositions (`App/deck-loadouts/`) with real-time leader portrait updates.
-- **Account & Master Management**: Real-time master stats overview and 9 one-click inventory and account tools (QP, Saint Quartz, Mana Prisms, All Servants, All Craft Essences, Max Bond, Max Skills).
 - **Universal Linux Game Launcher**: Auto-detects GPU configurations (NVIDIA `prime-run`, AMD/Intel `RADV`), manages Wayland / Hyprland tearing and fullscreen rules, injects translation hooks (`zh/fgozh.dll`), and synchronizes network routing.
-- **Automated Diagnostics**: 8-point system integrity check validating executables, hooks, artwork, translation files, network IP bindings, and scripts.
 
 ---
 
 ## Interface Showcase
 
-| Arcade Play Dashboard | Card Catalog & 30-Slot Loadouts |
+| Arcade Play Dashboard | Card Catalog & Responsive Deck Shelf |
 |:---:|:---:|
-| ![Arcade Play Dashboard](assets/screenshots/play_dashboard.png) | ![Card Catalog & Loadouts](assets/screenshots/card_loadouts.png) |
+| ![Arcade Play Dashboard](assets/screenshots/play_dashboard.png) | ![Card Catalog & Responsive Deck Shelf](assets/screenshots/card_loadouts.png) |
 | **Account Management & Growth Tools** | **Settings & Keybindings** |
 | ![Account Management Tools](assets/screenshots/account_tools.png) | ![Settings & Keybindings](assets/screenshots/settings_controls.png) |
 
@@ -53,7 +49,7 @@ Ensure the following packages are installed on your Linux distribution:
 
 ### Arch Linux / Manjaro
 ```bash
-sudo pacman -S python python-pyqt6 python-yaml wine mariadb net-tools
+sudo pacman -S python python-pyqt6 python-yaml wine mariadb iproute2
 ```
 
 ### Ubuntu / Debian
@@ -70,26 +66,38 @@ sudo dnf install python3 python3-pyqt6 python3-pyyaml wine mariadb-server iprout
 
 ## Installation & Setup
 
-### Method 1: Latch Onto an Existing FGOA Rip (Recommended)
+### Method 1: Arch Linux Native Package (Recommended for Arch / Manjaro / EndeavourOS)
+
+1. Build and install the Arch package using `makepkg`:
+   ```bash
+   cd packaging/arch
+   makepkg -si
+   ```
+2. The launcher is installed system-wide to `/opt/fgoa-launcher/` with a desktop entry and `/usr/bin/fgo-launcher` command.
+3. Attach the launcher overlay to your extracted Cloud23333 FGOA rip directory:
+   ```bash
+   cd /path/to/FGOA
+   /opt/fgoa-launcher/install.sh
+   ```
+
+### Method 2: Latch Onto an Existing FGOA Rip
 
 1. Clone or download this repository:
    ```bash
    git clone https://github.com/Min34r/fgo-ac-loonix.git
    cd fgo-ac-loonix
    ```
-
 2. Run `install.sh` targeting your extracted Cloud FGOA rip folder:
    ```bash
    ./install.sh /path/to/FGOA
    ```
    *(Add `--desktop` if you would like an application menu shortcut created).*
-
 3. Verify the installation:
    ```bash
    ./install.sh --check /path/to/FGOA
    ```
 
-### Method 2: Clone Directly Into FGOA Root
+### Method 3: Clone Directly Into FGOA Root
 
 You can also clone or extract the repository directly into your Cloud FGOA game directory and run:
 ```bash
@@ -131,6 +139,11 @@ From the game directory, start the launcher:
 ./FGO_Launcher.sh
 ```
 
+Or if installed via the Arch package:
+```bash
+fgo-launcher
+```
+
 ### Headless Verification Test
 To verify the launcher and Qt stack without launching the GUI:
 ```bash
@@ -150,12 +163,19 @@ fgoa-launcher/
 ├── README.md                    # Project documentation
 ├── docs/
 │   └── CONTROLLERS.md           # Gamepad, arcade stick & touch mapping guide
+├── packaging/
+│   └── arch/
+│       ├── PKGBUILD             # Arch Linux package build script
+│       ├── .SRCINFO             # Arch Linux source info metadata
+│       ├── fgo-arcade-launcher.desktop # Desktop application menu entry
+│       └── fgo-arcade-launcher.install # Post-install pacman hook script
 ├── assets/
 │   └── screenshots/             # Interface showcase images
 ├── deck-loadouts/               # Starter 30-card team loadout presets
 │   ├── Default Party.json
 │   └── Mash Kyrielight Starter.json
 ├── scripts/
+│   ├── patch_game_binaries.py   # Hex-level Wine & OpenGL compatibility hotpatcher
 │   ├── launch_linux.sh          # Universal GPU-detecting game runner
 │   ├── setup_prefix.sh          # Automated Wine prefix & font installer
 │   ├── install_translation.sh   # CLI English translation downloader & installer
@@ -177,11 +197,11 @@ fgoa-launcher/
     │   └── server_manager.py    # Socket monitor and service manager
     └── ui/
         ├── chamfer.py           # 45° chamfered buttons & container widgets
-        ├── theme.py             # Palette, colors, and global QSS styles
+        ├── theme.py             # Palette, OpaqueComboBox, and global QSS styles
         ├── main_window.py       # Main window, navigation, and log drawer
         ├── play_view.py         # Play dashboard & leader card portrait
         ├── account_view.py      # Profile metrics & 1-click inventory tools
-        ├── cards_view.py        # Card catalog grid & deck shelf
+        ├── cards_view.py        # Card catalog, pagination & responsive deck shelf
         ├── settings_view.py     # Display, keybindings, and audio settings
         └── advanced_view.py     # Network sync, 8-point diagnostics, and About
 ```

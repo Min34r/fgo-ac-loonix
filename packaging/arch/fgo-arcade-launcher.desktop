@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Fate/Grand Order Arcade
+Comment=Native Linux launcher and runtime orchestration overlay for FGO Arcade
+Exec=fgo-launcher
+Icon=fgo-arcade
+Terminal=false
+Type=Application
+Categories=Game;ArcadeGame;
+StartupNotify=true
