@@ -10,20 +10,23 @@ TARGET_DIR=""
 DO_CHECK=0
 INSTALL_DESKTOP=0
 
+INSTALL_APP=0
+
 show_help() {
     cat <<EOF
 Usage: ./install.sh [OPTIONS] [TARGET_FGOA_DIR]
 
 Options:
+  --app          Install the launcher as a standalone desktop app to ~/.local/share/fgoa-launcher.
   --check        Check system prerequisites and target directory without making changes.
   --desktop      Install a desktop menu shortcut (~/.local/share/applications/fgo-arcade.desktop).
   -h, --help     Show this help message.
 
 Examples:
-  # Install into current directory (if placed inside FGOA root)
-  ./install.sh
+  # Install as standalone app into user profile
+  ./install.sh --app
 
-  # Install overlay into extracted Cloud FGOA rip folder
+  # Install into extracted Cloud FGOA rip folder
   ./install.sh /home/user/Games/FGOA
 
   # Check prerequisites only
@@ -34,6 +37,9 @@ EOF
 # Parse options
 for arg in "$@"; do
     case "$arg" in
+        --app)
+            INSTALL_APP=1
+            ;;
         --check)
             DO_CHECK=1
             ;;
@@ -52,14 +58,84 @@ for arg in "$@"; do
     esac
 done
 
-# If target dir is omitted, check if SCRIPT_DIR is inside or is the FGOA root
+install_standalone_app() {
+    local install_root="${XDG_DATA_HOME:-$HOME/.local/share}/fgoa-launcher"
+    local bin_dir="${HOME}/.local/bin"
+    local apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    local icons_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
+
+    echo "============================================================"
+    echo " Fate/Grand Order Arcade - Standalone Desktop App Setup"
+    echo "============================================================"
+    echo "Installing launcher package to: ${install_root}"
+    mkdir -p "${install_root}" "${bin_dir}" "${apps_dir}" "${icons_dir}"
+
+    cp -r "${SCRIPT_DIR}/launcher" "${install_root}/"
+    cp -r "${SCRIPT_DIR}/scripts" "${install_root}/"
+    cp -r "${SCRIPT_DIR}/deck-loadouts" "${install_root}/"
+    cp -r "${SCRIPT_DIR}/assets" "${install_root}/"
+    cp "${SCRIPT_DIR}/FGO_Launcher.sh" "${install_root}/"
+    cp "${SCRIPT_DIR}/install.sh" "${install_root}/"
+    cp "${SCRIPT_DIR}/requirements.txt" "${install_root}/"
+    chmod +x "${install_root}/FGO_Launcher.sh" "${install_root}/install.sh" "${install_root}/scripts/"*.sh 2>/dev/null || true
+
+    cat << 'EOF' > "${bin_dir}/fgo-launcher"
+#!/usr/bin/env bash
+SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fgoa-launcher"
+exec "${SCRIPT_DIR}/FGO_Launcher.sh" "$@"
+EOF
+    chmod +x "${bin_dir}/fgo-launcher"
+
+    if [ -f "${SCRIPT_DIR}/launcher/assets/platform.png" ]; then
+        cp "${SCRIPT_DIR}/launcher/assets/platform.png" "${icons_dir}/fgo-arcade.png"
+    fi
+
+    cat << EOF > "${apps_dir}/fgo-arcade.desktop"
+[Desktop Entry]
+Type=Application
+Name=Fate/Grand Order Arcade
+Comment=Native Linux Launcher for Fate/Grand Order Arcade
+Exec=${bin_dir}/fgo-launcher
+Icon=fgo-arcade
+Terminal=false
+Categories=Game;ArcadeGame;
+StartupNotify=true
+EOF
+    chmod +x "${apps_dir}/fgo-arcade.desktop"
+
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "${apps_dir}" 2>/dev/null || true
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" 2>/dev/null || true
+
+    echo ""
+    echo "[OK] Installed Fate/Grand Order Arcade Launcher successfully!"
+    echo "  Command: ${bin_dir}/fgo-launcher"
+    echo "  Desktop entry: ${apps_dir}/fgo-arcade.desktop"
+    echo ""
+    echo "Launch the app from your application menu or run 'fgo-launcher' in a terminal."
+    echo "On first start, the app will ask you to select your game folder or install from game rip archives."
+    exit 0
+}
+
+# If standalone app install is requested
+if [ "$INSTALL_APP" -eq 1 ]; then
+    install_standalone_app
+fi
+
+# If target dir is omitted, check PWD, SCRIPT_DIR, or parent directory for FGOA root
 if [ -z "$TARGET_DIR" ]; then
-    if [ -d "${SCRIPT_DIR}/App" ] && [ -f "${SCRIPT_DIR}/App/ago.exe" ]; then
+    if [ -f "${PWD}/App/ago.exe" ] || [ -d "${PWD}/App" ]; then
+        TARGET_DIR="${PWD}"
+    elif [ -f "${SCRIPT_DIR}/App/ago.exe" ]; then
         TARGET_DIR="${SCRIPT_DIR}"
-    elif [ -d "${SCRIPT_DIR}/../App" ] && [ -f "${SCRIPT_DIR}/../App/ago.exe" ]; then
+    elif [ -f "${SCRIPT_DIR}/../App/ago.exe" ]; then
         TARGET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+    elif [ "${SCRIPT_DIR}" = "/opt/fgoa-launcher" ] || [ "${SCRIPT_DIR}" = "${XDG_DATA_HOME:-$HOME/.local/share}/fgoa-launcher" ]; then
+        echo "[FAIL] No target FGOA directory specified and current directory (${PWD}) does not contain App/ago.exe."
+        echo "Usage: fgo-launcher (to launch the app GUI) or ./install.sh /path/to/FGOA"
+        exit 1
     else
-        TARGET_DIR="${SCRIPT_DIR}"
+        # Running from standalone clone with no args -> default to installing the desktop app
+        install_standalone_app
     fi
 fi
 
@@ -163,11 +239,14 @@ else
     echo "  [WARN] Server/artemis not found."
 fi
 
-if [ -d "${DEVICE_DIR}/print/FGO11_AllServants" ]; then
+if [ -d "${DEVICE_DIR}/print/FGO11_51_AllServants" ]; then
+    CARD_COUNT=$(find "${DEVICE_DIR}/print/FGO11_51_AllServants" -maxdepth 1 -name "*.bmp" 2>/dev/null | wc -l || echo 0)
+    echo "  [OK] Card artwork catalog found (11.51: ${CARD_COUNT} bitmaps)"
+elif [ -d "${DEVICE_DIR}/print/FGO11_AllServants" ]; then
     CARD_COUNT=$(find "${DEVICE_DIR}/print/FGO11_AllServants" -maxdepth 1 -name "*.bmp" 2>/dev/null | wc -l || echo 0)
-    echo "  [OK] Card artwork catalog found (${CARD_COUNT} bitmaps)"
+    echo "  [OK] Card artwork catalog found (11.00: ${CARD_COUNT} bitmaps)"
 else
-    echo "  [INFO] DEVICE/print/FGO11_AllServants card artwork directory not found."
+    echo "  [INFO] Card artwork catalog not found in DEVICE/print."
 fi
 
 if [ "$DO_CHECK" -eq 1 ]; then
@@ -263,8 +342,14 @@ fi
 echo ""
 echo "[6/6] Finishing Setup..."
 
+CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fgoa-launcher"
+mkdir -p "${CFG_DIR}"
+echo "${TARGET_DIR}" > "${CFG_DIR}/root_path"
+echo "  [OK] Registered FGOA root path: ${CFG_DIR}/root_path"
+
 if [ "$INSTALL_DESKTOP" -eq 1 ]; then
     DESKTOP_DIR="${HOME}/.local/share/applications"
+    mkdir -p "${DESKTOP_DIR}"
     if [ -f "${TARGET_DIR}/launcher/assets/platform.png" ]; then
         ICON_PATH="${TARGET_DIR}/launcher/assets/platform.png"
     else

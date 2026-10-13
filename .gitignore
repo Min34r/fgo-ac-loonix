@@ -57,3 +57,6 @@ packaging/arch/pkg/
 packaging/arch/src/
 *.pkg.tar.zst
 
+# Graphify
+graphify-out/
+

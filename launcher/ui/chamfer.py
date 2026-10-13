@@ -1,69 +1,11 @@
 """
-Chamfered UI components: ChamferWidget and ChamferButton.
+Chamfered UI components: ChamferButton.
 Draws geometric panels with top-left and bottom-right 45-degree chamfered cuts.
 """
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import QPushButton, QWidget
-
-
-class ChamferWidget(QWidget):
-    """Container widget with top-left and bottom-right chamfered corners."""
-
-    def __init__(
-        self,
-        cut: float = 8.0,
-        stroke_color: str = "#7CC4E4",
-        stroke_width: float = 1.0,
-        fill_color: str = "#1A1D22",
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.cut = cut
-        self.stroke_color = QColor(stroke_color) if stroke_color else None
-        self.stroke_width = stroke_width
-        self.fill_color = QColor(fill_color) if fill_color else None
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-
-    def setColors(self, fill: str, stroke: str):
-        self.fill_color = QColor(fill) if fill else None
-        self.stroke_color = QColor(stroke) if stroke else None
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w = float(self.width())
-        h = float(self.height())
-        if w <= 0 or h <= 0:
-            return
-
-        inset = self.stroke_width / 2.0 if self.stroke_color else 0.0
-        c = max(0.0, min(self.cut, min(w, h) / 2.0))
-
-        # Top-left and bottom-right corners cut away
-        poly = QPolygonF([
-            QPointF(c + inset, inset),
-            QPointF(w - inset, inset),
-            QPointF(w - inset, h - c - inset),
-            QPointF(w - c - inset, h - inset),
-            QPointF(inset, h - inset),
-            QPointF(inset, c + inset),
-        ])
-
-        if self.fill_color:
-            painter.setBrush(QBrush(self.fill_color))
-        else:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        if self.stroke_color and self.stroke_width > 0:
-            painter.setPen(QPen(self.stroke_color, self.stroke_width))
-        else:
-            painter.setPen(Qt.PenStyle.NoPen)
-
-        painter.drawPolygon(poly)
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtWidgets import QPushButton
 
 
 class ChamferButton(QPushButton):

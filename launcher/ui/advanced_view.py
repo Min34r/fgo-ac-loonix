@@ -3,13 +3,11 @@ Advanced View: Server status, environment diagnostics, and system settings.
 """
 
 import os
-import subprocess
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -18,20 +16,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-try:
-    from launcher.core.network_sync import detect_host_ip, get_current_sync_info, sync_network
-except ImportError:
-    from ..core.network_sync import detect_host_ip, get_current_sync_info, sync_network
-
-try:
-    from launcher.ui.theme import Theme
-except ImportError:
-    from .theme import Theme
-
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from ..core.config import FGOA_ROOT
+from launcher.core.config import FGOA_ROOT
+from launcher.core.network_sync import detect_host_ip, get_current_sync_info, sync_network
+from launcher.ui.theme import Theme
 
 
 class AdvancedView(QWidget):
@@ -210,31 +197,7 @@ class AdvancedView(QWidget):
     def _switch_subtab(self, index: int):
         self.sub_stack.setCurrentIndex(index)
         for i, btn in enumerate(self.subtab_buttons):
-            if i == index:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        border: none;
-                        border-bottom: 2px solid {Theme.ICE};
-                        color: {Theme.ICE};
-                        font-weight: 600;
-                        font-size: 14px;
-                        padding: 6px 14px;
-                    }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        border: none;
-                        border-bottom: 2px solid transparent;
-                        color: {Theme.TEXT_MUTED};
-                        font-weight: 500;
-                        font-size: 14px;
-                        padding: 6px 14px;
-                    }}
-                    QPushButton:hover {{
-                        color: {Theme.TEXT};
-                    }}
-                """)
+            btn.setStyleSheet(Theme.subtab_style(i == index))
 
     def _sync_network_now(self):
         ok, msg = sync_network("local")
@@ -249,13 +212,16 @@ class AdvancedView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+        from launcher.core.config import CARD_DIR
+        has_trans = (
+            (os.path.exists(os.path.join(FGOA_ROOT, "App", "Localization")) and os.path.exists(os.path.join(FGOA_ROOT, "App", "fgozh.dll"))) or
+            (os.path.exists(os.path.join(FGOA_ROOT, "App", "zh", "executable-text.json")) and os.path.exists(os.path.join(FGOA_ROOT, "App", "zh", "fgozh.dll")))
+        )
         checks = [
             ("Game Executable (ago.exe)", os.path.exists(os.path.join(FGOA_ROOT, "App", "ago.exe"))),
             ("Hook Library (fgohook.dll)", os.path.exists(os.path.join(FGOA_ROOT, "App", "fgohook.dll"))),
-            ("Translation FarC Sprites (App/zh/rom)", os.path.exists(os.path.join(FGOA_ROOT, "App", "zh", "rom"))),
-            ("Translation Strings (executable-text.json)", os.path.exists(os.path.join(FGOA_ROOT, "App", "zh", "executable-text.json"))),
-            ("Translation Hook DLL (zh/fgozh.dll)", os.path.exists(os.path.join(FGOA_ROOT, "App", "zh", "fgozh.dll"))),
-            ("Card Artwork Catalog (DEVICE/print)", os.path.exists(os.path.join(FGOA_ROOT, "DEVICE", "print", "FGO11_AllServants"))),
+            ("Translation / Localization Stack", has_trans),
+            ("Card Artwork Catalog (DEVICE/print)", os.path.isdir(CARD_DIR)),
             ("Virtual Network Synced (192.168.100.1)", True),
             ("Launch Script (launch_linux.sh / launch_nvidia.sh)", (
                 os.path.exists(os.path.join(FGOA_ROOT, "scripts", "launch_linux.sh")) or

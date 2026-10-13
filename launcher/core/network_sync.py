@@ -8,12 +8,7 @@ import os
 import re
 import subprocess
 from typing import Tuple
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from .config import FGOA_ROOT
-SEGATOOLS_INI = os.path.join(FGOA_ROOT, "App", "segatools.ini")
-CORE_YAML = os.path.join(FGOA_ROOT, "Server", "artemis", "config", "core.yaml")
+from launcher.core.config import CONFIG_INI as SEGATOOLS_INI, SERVER_CONFIG_YAML as CORE_YAML
 
 
 def detect_host_ip() -> str:
@@ -25,14 +20,10 @@ def detect_host_ip() -> str:
             text=True,
             check=False,
         )
-        if res.returncode == 0:
-            match = re.search(r"src\s+(\d+\.\d+\.\d+\.\d+)", res.stdout)
-            if match:
-                return match.group(1)
+        if res.returncode == 0 and (m := re.search(r"src\s+(\d+\.\d+\.\d+\.\d+)", res.stdout)):
+            return m.group(1)
     except Exception:
         pass
-
-    # Fallback to local loopback
     return "127.0.0.1"
 
 
@@ -43,32 +34,20 @@ def sync_network(mode: str = "local", custom_ip: str = "") -> Tuple[bool, str]:
     - 'lan': Host's active LAN IP.
     """
     if mode == "local":
-        target_ip = "192.168.100.1"
-        subnet = "192.168.100.0"
-        addr_suffix = "11"
-        broadcast = "127.0.0.1"
+        target_ip, subnet, addr_suffix, broadcast = "192.168.100.1", "192.168.100.0", "11", "127.0.0.1"
     else:
-        target_ip = custom_ip if custom_ip else detect_host_ip()
+        target_ip = custom_ip or detect_host_ip()
         parts = target_ip.split(".")
-        if len(parts) == 4:
-            subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0"
-            addr_suffix = parts[3]
-            broadcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
-        else:
+        if len(parts) != 4:
             return False, f"Invalid IP address: {target_ip}"
+        prefix = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        subnet, addr_suffix, broadcast = f"{prefix}.0", parts[3], f"{prefix}.255"
 
     # 1. Update Server/artemis/config/core.yaml
     if os.path.isfile(CORE_YAML):
         try:
             with open(CORE_YAML, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            content = re.sub(
-                r"(hostname:\s*)[^\n]+",
-                rf"\g<1>{target_ip}",
-                content,
-            )
-
+                content = re.sub(r"(hostname:\s*)[^\n]+", rf"\g<1>{target_ip}", f.read())
             with open(CORE_YAML, "w", encoding="utf-8") as f:
                 f.write(content)
         except Exception as e:
@@ -79,37 +58,13 @@ def sync_network(mode: str = "local", custom_ip: str = "") -> Tuple[bool, str]:
         try:
             with open(SEGATOOLS_INI, "r", encoding="utf-8") as f:
                 content = f.read()
-
-            # [dns] default=...
-            content = re.sub(
-                r"(\[dns\][^\[]*?default=)[^\n]+",
-                rf"\g<1>{target_ip}",
-                content,
-                flags=re.DOTALL,
-            )
-
-            # [netenv] addrSuffix=... broadcast=...
-            content = re.sub(
-                r"(\[netenv\][^\[]*?addrSuffix=)[^\n]+",
-                rf"\g<1>{addr_suffix}",
-                content,
-                flags=re.DOTALL,
-            )
-            content = re.sub(
-                r"(\[netenv\][^\[]*?broadcast=)[^\n]+",
-                rf"\g<1>{broadcast}",
-                content,
-                flags=re.DOTALL,
-            )
-
-            # [keychip] subnet=...
-            content = re.sub(
-                r"(\[keychip\][^\[]*?subnet=)[^\n]+",
-                rf"\g<1>{subnet}",
-                content,
-                flags=re.DOTALL,
-            )
-
+            for pat, val in (
+                (r"(\[dns\][^\[]*?default=)[^\n]+", target_ip),
+                (r"(\[netenv\][^\[]*?addrSuffix=)[^\n]+", addr_suffix),
+                (r"(\[netenv\][^\[]*?broadcast=)[^\n]+", broadcast),
+                (r"(\[keychip\][^\[]*?subnet=)[^\n]+", subnet),
+            ):
+                content = re.sub(pat, rf"\g<1>{val}", content, flags=re.DOTALL)
             with open(SEGATOOLS_INI, "w", encoding="utf-8") as f:
                 f.write(content)
         except Exception as e:
@@ -123,12 +78,9 @@ def get_current_sync_info() -> Tuple[str, str]:
     if os.path.isfile(SEGATOOLS_INI):
         try:
             with open(SEGATOOLS_INI, "r", encoding="utf-8") as f:
-                content = f.read()
-            match = re.search(r"\[dns\][^\[]*?default=([^\n\r;]+)", content, re.DOTALL)
-            if match:
-                ip = match.group(1).strip()
-                mode = "Local Loopback" if ip == "192.168.100.1" else "LAN Mode"
-                return ip, mode
+                if match := re.search(r"\[dns\][^\[]*?default=([^\n\r;]+)", f.read(), re.DOTALL):
+                    ip = match.group(1).strip()
+                    return ip, ("Local Loopback" if ip == "192.168.100.1" else "LAN Mode")
         except Exception:
             pass
     return "Unknown", "Unknown"

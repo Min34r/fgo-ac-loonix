@@ -127,26 +127,12 @@ def inspect_patch(file_path: str, patch_info: dict) -> str:
         return "mismatch"
 
 
-def apply_patch(file_path: str, patch_info: dict) -> bool:
-    """Applies a patch to the target file at the specified offset."""
-    offset = patch_info["offset"]
-    pat = patch_info["patched"]
+def write_bytes_at(file_path: str, offset: int, payload: bytes) -> None:
+    """Writes payload bytes to the target file at the specified offset."""
     with open(file_path, "r+b") as f:
         f.seek(offset)
-        f.write(pat)
+        f.write(payload)
         f.flush()
-    return True
-
-
-def revert_patch(file_path: str, patch_info: dict) -> bool:
-    """Reverts a patch to original bytes at the specified offset."""
-    offset = patch_info["offset"]
-    orig = patch_info["original"]
-    with open(file_path, "r+b") as f:
-        f.seek(offset)
-        f.write(orig)
-        f.flush()
-    return True
 
 
 # ------------------------------------------------------------------------------
@@ -208,7 +194,7 @@ def process_file(file_path: str, patches: List[dict], mode: str = "patch") -> Tu
         applied = 0
         for p, state in zip(patches, states):
             if state == "original":
-                apply_patch(file_path, p)
+                write_bytes_at(file_path, p["offset"], p["patched"])
                 applied += 1
                 print(f"  [APPLIED] Patch site at 0x{p['offset']:X} -> {p['name']}")
 
@@ -223,7 +209,7 @@ def process_file(file_path: str, patches: List[dict], mode: str = "patch") -> Tu
             reverted = 0
             for p, state in zip(patches, states):
                 if state == "patched":
-                    revert_patch(file_path, p)
+                    write_bytes_at(file_path, p["offset"], p["original"])
                     reverted += 1
             print(f"  [SUCCESS] {reverted} patch(es) reverted in-place.")
 

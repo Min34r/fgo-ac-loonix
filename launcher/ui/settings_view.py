@@ -4,20 +4,17 @@ Settings View: Display, Controls (segatools.ini), and Audio configurations.
 
 import json
 import os
+from typing import Dict
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
-    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -30,40 +27,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from launcher.ui.theme import Theme, OpaqueComboBox
+from launcher.core.config import APP_DIR
+from launcher.core.controls_manager import (
+    DEFAULT_CONTROLS,
+    get_segatools_ini_path,
+    load_controls_config,
+    qt_key_to_vk,
+    save_controls_config,
+    vk_to_display_name,
+)
+from launcher.core.translation_installer import TranslationInstallerWorker, is_translation_installed
+from launcher.ui.theme import OpaqueComboBox, Theme
 
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from ..core.config import FGOA_ROOT
-
-try:
-    from launcher.core.translation_installer import TranslationInstallerWorker, is_translation_installed
-except ImportError:
-    from ..core.translation_installer import TranslationInstallerWorker, is_translation_installed
-
-try:
-    from launcher.core.controls_manager import (
-        DEFAULT_CONTROLS,
-        VK_MAP,
-        get_segatools_ini_path,
-        load_controls_config,
-        qt_key_to_vk,
-        save_controls_config,
-        vk_to_display_name,
-    )
-except ImportError:
-    from ..core.controls_manager import (
-        DEFAULT_CONTROLS,
-        VK_MAP,
-        get_segatools_ini_path,
-        load_controls_config,
-        qt_key_to_vk,
-        save_controls_config,
-        vk_to_display_name,
-    )
-
-CONFIG_JSON = os.path.join(FGOA_ROOT, "App", "fgo-launcher.json")
+CONFIG_JSON = os.path.join(APP_DIR, "fgo-launcher.json")
 
 
 # ==============================================================================
@@ -528,54 +504,35 @@ class SettingsView(QWidget):
         l_grp_kb.setContentsMargins(0, 0, 0, 0)
         l_grp_kb.setSpacing(12)
 
-        # Movement
-        lbl_sec_move = QLabel("Arcade Joystick Movement")
-        lbl_sec_move.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.ICE};")
-        l_grp_kb.addWidget(lbl_sec_move)
-
-        move_bindings = [
-            ("up", "Movement: Up"),
-            ("down", "Movement: Down"),
-            ("left", "Movement: Left"),
-            ("right", "Movement: Right"),
+        sections = [
+            ("Arcade Joystick Movement", "", [
+                ("up", "Movement: Up"),
+                ("down", "Movement: Down"),
+                ("left", "Movement: Left"),
+                ("right", "Movement: Right"),
+            ]),
+            ("Arcade Action Buttons", " margin-top: 8px;", [
+                ("attack", "Attack (Button 1)"),
+                ("target", "Target Lock-On (Button 2)"),
+                ("dash", "Dash / Guard (Button 3)"),
+                ("np", "Noble Phantasm (Button 4)"),
+                ("camera", "Center Camera"),
+            ]),
+            ("Cabinet Hardware & System", " margin-top: 8px;", [
+                ("coin", "Insert Coin (100 Yen)"),
+                ("service", "Service Credit Switch"),
+                ("test", "Test Menu Switch"),
+                ("scan", "Aime Card Login Touch"),
+            ]),
         ]
-        for key, name in move_bindings:
-            row = KeyBindingRow(key, name, self._controls.get(key, "0x0"), self._on_key_rebound)
-            self._key_rows[key] = row
-            l_grp_kb.addWidget(row)
-
-        # Actions
-        lbl_sec_act = QLabel("Arcade Action Buttons")
-        lbl_sec_act.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.ICE}; margin-top: 8px;")
-        l_grp_kb.addWidget(lbl_sec_act)
-
-        action_bindings = [
-            ("attack", "Attack (Button 1)"),
-            ("target", "Target Lock-On (Button 2)"),
-            ("dash", "Dash / Guard (Button 3)"),
-            ("np", "Noble Phantasm (Button 4)"),
-            ("camera", "Center Camera"),
-        ]
-        for key, name in action_bindings:
-            row = KeyBindingRow(key, name, self._controls.get(key, "0x0"), self._on_key_rebound)
-            self._key_rows[key] = row
-            l_grp_kb.addWidget(row)
-
-        # Cabinet
-        lbl_sec_cab = QLabel("Cabinet Hardware & System")
-        lbl_sec_cab.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.ICE}; margin-top: 8px;")
-        l_grp_kb.addWidget(lbl_sec_cab)
-
-        cab_bindings = [
-            ("coin", "Insert Coin (100 Yen)"),
-            ("service", "Service Credit Switch"),
-            ("test", "Test Menu Switch"),
-            ("scan", "Aime Card Login Touch"),
-        ]
-        for key, name in cab_bindings:
-            row = KeyBindingRow(key, name, self._controls.get(key, "0x0"), self._on_key_rebound)
-            self._key_rows[key] = row
-            l_grp_kb.addWidget(row)
+        for title, extra_style, bindings in sections:
+            lbl = QLabel(title)
+            lbl.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.ICE};{extra_style}")
+            l_grp_kb.addWidget(lbl)
+            for key, name in bindings:
+                row = KeyBindingRow(key, name, self._controls.get(key, "0x0"), self._on_key_rebound)
+                self._key_rows[key] = row
+                l_grp_kb.addWidget(row)
 
         self.l_ctrl_body.addWidget(self.grp_kb)
 
@@ -695,46 +652,17 @@ class SettingsView(QWidget):
     def _switch_subtab(self, index: int):
         self.sub_stack.setCurrentIndex(index)
         for i, btn in enumerate(self.subtab_buttons):
-            if i == index:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        border: none;
-                        border-bottom: 2px solid {Theme.ICE};
-                        color: {Theme.ICE};
-                        font-weight: 600;
-                        font-size: 14px;
-                        padding: 6px 14px;
-                    }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        border: none;
-                        border-bottom: 2px solid transparent;
-                        color: {Theme.TEXT_MUTED};
-                        font-weight: 500;
-                        font-size: 14px;
-                        padding: 6px 14px;
-                    }}
-                    QPushButton:hover {{
-                        color: {Theme.TEXT};
-                    }}
-                """)
+            btn.setStyleSheet(Theme.subtab_style(i == index))
 
     # -----------------------------------------------------------------
     # Controls Management
     # -----------------------------------------------------------------
 
     def _refresh_controls_ui(self):
-        mode = str(self._controls.get("mode", "keyboard")).lower()
-        if mode == "xinput":
-            self.rb_mode_xinput.setChecked(True)
-            self.grp_kb.setVisible(False)
-            self.grp_xinput.setVisible(True)
-        else:
-            self.rb_mode_kb.setChecked(True)
-            self.grp_kb.setVisible(True)
-            self.grp_xinput.setVisible(False)
+        is_xinput = str(self._controls.get("mode", "keyboard")).lower() == "xinput"
+        (self.rb_mode_xinput if is_xinput else self.rb_mode_kb).setChecked(True)
+        self.grp_kb.setVisible(not is_xinput)
+        self.grp_xinput.setVisible(is_xinput)
 
         for key, row in self._key_rows.items():
             if key in self._controls:
@@ -748,14 +676,10 @@ class SettingsView(QWidget):
         self.sld_rumble.setValue(int(self._controls.get("rumbleStrength", 70)))
 
     def _on_mode_toggled(self):
-        if self.rb_mode_xinput.isChecked():
-            self._controls["mode"] = "xinput"
-            self.grp_kb.setVisible(False)
-            self.grp_xinput.setVisible(True)
-        else:
-            self._controls["mode"] = "keyboard"
-            self.grp_kb.setVisible(True)
-            self.grp_xinput.setVisible(False)
+        is_xinput = self.rb_mode_xinput.isChecked()
+        self._controls["mode"] = "xinput" if is_xinput else "keyboard"
+        self.grp_kb.setVisible(not is_xinput)
+        self.grp_xinput.setVisible(is_xinput)
 
     def _on_key_rebound(self, action_key: str, new_vk: str):
         self._controls[action_key] = new_vk

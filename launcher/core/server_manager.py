@@ -7,44 +7,19 @@ import os
 import socket
 import subprocess
 from dataclasses import dataclass
-from typing import Dict
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from .config import FGOA_ROOT
-
-SERVER_DIR = os.path.join(FGOA_ROOT, "Server")
-
-def get_server_start_script() -> str:
-    candidates = [
-        os.path.join(SERVER_DIR, "start_server_native.sh"),
-        os.path.join(FGOA_ROOT, "scripts", "start_server_native.sh"),
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    return os.path.join(SERVER_DIR, "start_server_native.sh")
-
-START_SCRIPT = get_server_start_script()
-
-def get_server_stop_script() -> str:
-    candidates = [
-        os.path.join(SERVER_DIR, "stop_server_native.sh"),
-        os.path.join(FGOA_ROOT, "scripts", "stop_server_native.sh"),
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    return os.path.join(SERVER_DIR, "stop_server_native.sh")
-
-STOP_SCRIPT = get_server_stop_script()
+from launcher.core.config import FGOA_ROOT, SERVER_DIR
 
 
-@dataclass
-class ServiceStatus:
-    name: str
-    port: int
-    is_running: bool
+def _server_script(name: str) -> str:
+    candidates = (
+        os.path.join(SERVER_DIR, name),
+        os.path.join(FGOA_ROOT, "scripts", name),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", name),
+    )
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return os.path.join(SERVER_DIR, name)
 
 
 @dataclass
@@ -55,21 +30,21 @@ class ServerStatus:
     artemis_aimedb: bool = False
 
     @property
+    def up_count(self) -> int:
+        return sum((self.mariadb, self.artemis_http, self.artemis_billing, self.artemis_aimedb))
+
+    @property
     def is_all_online(self) -> bool:
-        return self.mariadb and self.artemis_http and self.artemis_billing and self.artemis_aimedb
+        return self.up_count == 4
 
 
 def check_port(port: int, host: str = "127.0.0.1", timeout: float = 0.3) -> bool:
     """Test if a TCP port is listening."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
     try:
-        res = sock.connect_ex((host, port))
-        return res == 0
-    except Exception:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
         return False
-    finally:
-        sock.close()
 
 
 def get_server_status() -> ServerStatus:
@@ -84,53 +59,23 @@ def get_server_status() -> ServerStatus:
 
 def start_server_stack() -> subprocess.Popen:
     """Launch native MariaDB and Artemis server stack."""
-    cmd = ["bash", START_SCRIPT]
+    script = _server_script("start_server_native.sh")
+    env = os.environ.copy()
+    env["FGOA_ROOT"] = FGOA_ROOT
     return subprocess.Popen(
-        cmd,
-        cwd=SERVER_DIR,
+        ["bash", script],
+        cwd=SERVER_DIR if os.path.isdir(SERVER_DIR) else FGOA_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=env,
     )
 
 
 def stop_server_stack() -> None:
     """Stop MariaDB and Artemis native instances."""
-    if os.path.isfile(STOP_SCRIPT):
-        subprocess.run(["bash", STOP_SCRIPT], check=False)
+    script = _server_script("stop_server_native.sh")
+    if os.path.isfile(script):
+        subprocess.run(["bash", script], check=False)
     subprocess.run(["pkill", "-f", "artemis.*index.py"], check=False)
     subprocess.run(["pkill", "-f", "mariadbd.*mariadb_native.cnf"], check=False)
-
-
-def restart_server_stack() -> subprocess.Popen:
-    """Restart server stack."""
-    stop_server_stack()
-    return start_server_stack()
-
-
-class ServerManager:
-    """Object-oriented wrapper around server lifecycle and status monitoring."""
-
-    def __init__(self):
-        pass
-
-    def get_status(self) -> ServerStatus:
-        return get_server_status()
-
-    def get_all_statuses(self) -> Dict[str, ServiceStatus]:
-        status = get_server_status()
-        return {
-            "MariaDB": ServiceStatus("MariaDB (Port 3307)", 3307, status.mariadb),
-            "HTTP": ServiceStatus("Artemis HTTP (Port 8777)", 8777, status.artemis_http),
-            "Billing": ServiceStatus("Artemis Billing (Port 8443)", 8443, status.artemis_billing),
-            "AimeDB": ServiceStatus("Artemis AimeDB (Port 22345)", 22345, status.artemis_aimedb),
-        }
-
-    def start_all(self):
-        return start_server_stack()
-
-    def stop_all(self):
-        stop_server_stack()
-
-    def restart_all(self):
-        return restart_server_stack()

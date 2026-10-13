@@ -77,4 +77,29 @@ if [ -f "${SCRIPT_DIR}/stop_server_native.sh" ]; then
     chmod +x "${SERVER_DIR}/stop_server_native.sh" 2>/dev/null || true
 fi
 
+# 4. Synchronize version configuration (11.00 vs 11.51) and clean up obsolete components
+FGO_YAML="${ARTEMIS_DIR}/config/fgo.yaml"
+AUX_JSON="${FGOA_ROOT}/GameData/SDEJ/amdaemon_aux.json"
+
+if [ -d "${FGOA_ROOT}/DEVICE/print/FGO11_51_AllServants" ] || [ -d "${FGOA_ROOT}/App/Localization" ]; then
+    echo "[VERSION] Detected 11.51 (V1.10) game files. Ensuring 11.51 server & data configuration..."
+    if [ -f "${FGO_YAML}" ]; then
+        sed -i 's/advertise_version: *[0-9]*/advertise_version: 1151/g' "${FGO_YAML}" 2>/dev/null || true
+    fi
+    if [ -f "${AUX_JSON}" ]; then
+        sed -i 's/"develop_version": *"[^"]*"/"develop_version": "11.51"/g' "${AUX_JSON}" 2>/dev/null || true
+    fi
+    if [ -f "${FGOA_ROOT}/App/deck.json" ]; then
+        sed -i 's/FGO11_AllServants/FGO11_51_AllServants/g' "${FGOA_ROOT}/App/deck.json" 2>/dev/null || true
+    fi
+    # Clean obsolete 11.00 files replaced by 11.51
+    rm -rf "${FGOA_ROOT}/App/ICF1" "${FGOA_ROOT}/App/ICF2" \
+           "${FGOA_ROOT}/App/EasterEgg" "${FGOA_ROOT}/App/BGM" \
+           "${FGOA_ROOT}/App/FGOAudio.dll" "${FGOA_ROOT}/App/FgoDlss.dll" 2>/dev/null || true
+    if [ -d "${FGOA_ROOT}/App/Localization/zh" ] && [ -d "${FGOA_ROOT}/App/zh" ]; then
+        rm -rf "${FGOA_ROOT}/App/zh" 2>/dev/null || true
+    fi
+    echo "  [OK] Server advertise_version set to 1151 and obsolete 11.00 files cleaned."
+fi
+
 echo "[DONE] Artemis server Linux compatibility verification complete."

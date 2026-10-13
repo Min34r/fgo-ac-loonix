@@ -200,113 +200,41 @@ class Theme:
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0px;
         }}
-        QComboBox {{
-            background-color: {PLATE};
-            color: {TEXT};
-            border: 1px solid {LINE};
-            border-radius: 3px;
-            padding: 4px 10px;
-            font-size: 12px;
-            min-height: 22px;
-        }}
-        QComboBox:hover, QComboBox:focus {{
-            border-color: {ICE};
-        }}
-        QComboBox:disabled {{
-            background-color: {GROUND};
-            color: {TEXT_FAINT};
-            border-color: {LINE_SOFT};
-        }}
-        QComboBox::drop-down {{
-            subcontrol-origin: padding;
-            subcontrol-position: top right;
-            width: 22px;
-            border-left: 1px solid {LINE};
-            background-color: {PLATE_LOW};
-            border-top-right-radius: 3px;
-            border-bottom-right-radius: 3px;
-        }}
-        QComboBox::drop-down:hover {{
-            background-color: {LINE_SOFT};
-        }}
-        QComboBox::down-arrow {{
-            width: 0;
-            height: 0;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 5px solid {TEXT_MUTED};
-        }}
-        QComboBox::down-arrow:hover {{
-            border-top-color: {ICE};
-        }}
-        QComboBox QAbstractItemView {{
-            background-color: {PLATE};
-            color: {TEXT};
-            border: 1px solid {ICE};
-            selection-background-color: {LINE};
-            selection-color: {ICE};
-            padding: 2px;
-            outline: none;
-        }}
-        QComboBox QAbstractItemView::item {{
-            min-height: 24px;
-            padding: 4px 8px;
-            border: none;
-        }}
-        QComboBox QAbstractItemView::item:hover {{
-            background-color: {LINE_SOFT};
-            color: {ICE};
-        }}
-        QComboBox QAbstractItemView::item:selected {{
-            background-color: {LINE};
-            color: {ICE};
-        }}
+        {COMBOBOX}
     """
+
+    @classmethod
+    def subtab_style(cls, active: bool) -> str:
+        if active:
+            return f"""
+                QPushButton {{
+                    border: none;
+                    border-bottom: 2px solid {cls.ICE};
+                    color: {cls.ICE};
+                    font-weight: 600;
+                    font-size: 14px;
+                    padding: 6px 14px;
+                }}
+            """
+        return f"""
+            QPushButton {{
+                border: none;
+                border-bottom: 2px solid transparent;
+                color: {cls.TEXT_MUTED};
+                font-weight: 500;
+                font-size: 14px;
+                padding: 6px 14px;
+            }}
+            QPushButton:hover {{
+                color: {cls.TEXT};
+            }}
+        """
 
 
 class OpaqueComboBox(QComboBox):
-    """
-    QComboBox that guarantees an opaque solid background for both the closed widget
-    and the popup list across Wayland and X11 compositors under Qt6.
-    """
+    """QComboBox with dark opaque styling for Wayland and X11 compositors."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(Theme.COMBOBOX)
-        self._ensure_opaque_popup()
-
-    def _ensure_opaque_popup(self):
-        view = self.view()
-        if view:
-            view.setAutoFillBackground(True)
-            view.setStyleSheet(f"""
-                QAbstractItemView {{
-                    background-color: {Theme.PLATE};
-                    color: {Theme.TEXT};
-                    border: 1px solid {Theme.ICE};
-                    selection-background-color: {Theme.LINE};
-                    selection-color: {Theme.ICE};
-                    outline: none;
-                }}
-                QAbstractItemView::item {{
-                    min-height: 24px;
-                    padding: 4px 8px;
-                }}
-                QAbstractItemView::item:hover {{
-                    background-color: {Theme.LINE_SOFT};
-                    color: {Theme.ICE};
-                }}
-                QAbstractItemView::item:selected {{
-                    background-color: {Theme.LINE};
-                    color: {Theme.ICE};
-                }}
-            """)
-            container = view.parentWidget()
-            if container:
-                container.setAutoFillBackground(True)
-                container.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid {Theme.ICE};")
-
-    def showPopup(self):
-        super().showPopup()
-        self._ensure_opaque_popup()
 

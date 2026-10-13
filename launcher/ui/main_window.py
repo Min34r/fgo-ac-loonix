@@ -4,11 +4,11 @@ Provides header controls, sidebar navigation, view container, and system logs dr
 """
 
 import os
-import subprocess
+import time
 from typing import Optional
 
-from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -24,26 +24,20 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from launcher.core.config import FGOA_ROOT
 from launcher.core.game_process import GameProcessManager
 from launcher.core.server_manager import (
-    ServerManager,
-    ServerStatus,
     get_server_status,
-    restart_server_stack,
     start_server_stack,
     stop_server_stack,
 )
+from launcher.ui.account_view import AccountView
 from launcher.ui.advanced_view import AdvancedView
 from launcher.ui.cards_view import CardsView
 from launcher.ui.chamfer import ChamferButton
-from launcher.ui.account_view import AccountView
 from launcher.ui.play_view import PlayView
 from launcher.ui.settings_view import SettingsView
 from launcher.ui.theme import Theme
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from ..core.config import FGOA_ROOT
 
 ASSETS_DIR = os.path.join(FGOA_ROOT, "launcher", "assets")
 PLATFORM_PNG = os.path.join(ASSETS_DIR, "platform.png")
@@ -60,8 +54,7 @@ class ServerStartupWorker(QThread):
             proc = start_server_stack()
             if proc.stdout:
                 for line in iter(proc.stdout.readline, ""):
-                    line_str = line.strip()
-                    if line_str:
+                    if line_str := line.strip():
                         self.progress.emit(f"[SERVER] {line_str}")
             proc.wait()
 
@@ -70,18 +63,22 @@ class ServerStartupWorker(QThread):
                 return
 
             self.progress.emit("[SERVER] Script exited. Waiting for ports to come online...")
-            import time
             for i in range(30):
                 status = get_server_status()
                 if status.is_all_online:
                     self.progress.emit("[SERVER] All services online (MariaDB, HTTP, Billing, AimeDB)")
                     self.finished.emit(True, "")
                     return
-                missing = []
-                if not status.mariadb: missing.append("MariaDB:3307")
-                if not status.artemis_http: missing.append("HTTP:8777")
-                if not status.artemis_billing: missing.append("Billing:8443")
-                if not status.artemis_aimedb: missing.append("AimeDB:22345")
+                missing = [
+                    name
+                    for ok, name in (
+                        (status.mariadb, "MariaDB:3307"),
+                        (status.artemis_http, "HTTP:8777"),
+                        (status.artemis_billing, "Billing:8443"),
+                        (status.artemis_aimedb, "AimeDB:22345"),
+                    )
+                    if not ok
+                ]
                 self.progress.emit(f"[SERVER] Waiting for: {', '.join(missing)} ({i+1}/30)")
                 time.sleep(1.0)
 
@@ -115,11 +112,6 @@ class SidebarButton(QPushButton):
                     border-left: 3px solid {Theme.ICE};
                     outline: none;
                 }}
-                QPushButton:focus {{
-                    outline: none;
-                    border: none;
-                    border-left: 3px solid {Theme.ICE};
-                }}
             """)
         else:
             self.setStyleSheet(f"""
@@ -136,11 +128,6 @@ class SidebarButton(QPushButton):
                 QPushButton:hover {{
                     background-color: {Theme.PLATE_LOW};
                     color: {Theme.TEXT};
-                    outline: none;
-                }}
-                QPushButton:focus {{
-                    outline: none;
-                    border: none;
                 }}
             """)
 
@@ -156,29 +143,57 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1240, 780)
         self.resize(1366, 860)
 
-        # Set Icon
-        if os.path.exists(PLATFORM_PNG):
-            self.setWindowIcon(QIcon(PLATFORM_PNG))
-        elif os.path.exists(PLATFORM_ICO):
-            self.setWindowIcon(QIcon(PLATFORM_ICO))
+        for icon_path in (PLATFORM_PNG, PLATFORM_ICO):
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+                break
 
         self.game_process = GameProcessManager(self)
-        self.server_manager = ServerManager()
-
         self._auto_manage_server = True
         self._server_worker: Optional[ServerStartupWorker] = None
         self._logs_visible = True
         self._init_ui()
         self._wire_signals()
 
-        # Start Server Status Poll Timer
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._poll_status)
         self.status_timer.start(3000)
         self._poll_status()
 
+    def _make_log_box(self, title: str, text_color: str) -> tuple[QFrame, QPlainTextEdit]:
+        box = QFrame()
+        box.setStyleSheet(f"QFrame {{ background-color: {Theme.PLATE}; border: 1px solid {Theme.LINE}; }}")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        hdr = QFrame()
+        hdr.setFixedHeight(30)
+        hdr.setStyleSheet(f"background-color: {Theme.PLATE}; border-bottom: 1px solid {Theme.LINE};")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(12, 0, 12, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet(f"color: {Theme.TEXT}; font-size: 13px; font-weight: 600; border: none;")
+        hl.addWidget(lbl)
+        hl.addStretch()
+
+        txt = QPlainTextEdit()
+        txt.setReadOnly(True)
+        txt.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {Theme.GROUND};
+                color: {text_color};
+                font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                border: none;
+                padding: 6px;
+            }}
+        """)
+        layout.addWidget(hdr)
+        layout.addWidget(txt)
+        return box, txt
+
     def _init_ui(self):
-        # Global Window Styling
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {Theme.GROUND};
@@ -207,42 +222,30 @@ class MainWindow(QMainWindow):
         # =============================================================
         header = QFrame()
         header.setFixedHeight(60)
-        header.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.GROUND};
-                border-bottom: 1px solid {Theme.LINE};
-            }}
-        """)
+        header.setStyleSheet(f"QFrame {{ background-color: {Theme.GROUND}; border-bottom: 1px solid {Theme.LINE}; }}")
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(18, 0, 18, 0)
         h_layout.setSpacing(16)
 
-        # Left: Icon + Brand Name
         brand_box = QHBoxLayout()
         brand_box.setSpacing(12)
         lbl_icon = QLabel()
         if os.path.exists(PLATFORM_ICO):
-            pix = QPixmap(PLATFORM_ICO).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            lbl_icon.setPixmap(pix)
+            lbl_icon.setPixmap(
+                QPixmap(PLATFORM_ICO).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            )
         lbl_icon.setFixedSize(32, 32)
 
         lbl_brand = QLabel("Fate/Grand Order Arcade")
-        lbl_brand.setStyleSheet(f"""
-            font-size: 19px;
-            font-weight: 700;
-            color: {Theme.TEXT};
-            letter-spacing: 0.3px;
-        """)
+        lbl_brand.setStyleSheet(f"font-size: 19px; font-weight: 700; color: {Theme.TEXT}; letter-spacing: 0.3px;")
         brand_box.addWidget(lbl_icon)
         brand_box.addWidget(lbl_brand)
         h_layout.addLayout(brand_box)
 
-        # Middle: Runtime Status Label
         self.lbl_header_status = QLabel("Checking server ports...")
         self.lbl_header_status.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px;")
         h_layout.addWidget(self.lbl_header_status, stretch=1)
 
-        # Right: Action Buttons
         actions_box = QHBoxLayout()
         actions_box.setSpacing(10)
 
@@ -275,7 +278,6 @@ class MainWindow(QMainWindow):
         """)
         self.btn_stop_game.clicked.connect(self._stop_game)
 
-        # Chamfered Play Hero Button
         self.btn_play_top = ChamferButton(
             "Play",
             cut=8.0,
@@ -294,7 +296,6 @@ class MainWindow(QMainWindow):
         actions_box.addWidget(self.btn_stop_game)
         actions_box.addWidget(self.btn_play_top)
         h_layout.addLayout(actions_box)
-
         root_layout.addWidget(header)
 
         # =============================================================
@@ -303,23 +304,14 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
 
-        # -------------------------------------------------------------
-        # 2A. Workspace: Left Sidebar + Central Stack
-        # -------------------------------------------------------------
         workspace = QWidget()
         ws_layout = QHBoxLayout(workspace)
         ws_layout.setContentsMargins(0, 0, 0, 0)
         ws_layout.setSpacing(0)
 
-        # Sidebar
         sidebar = QFrame()
         sidebar.setFixedWidth(200)
-        sidebar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.GROUND};
-                border-right: 1px solid {Theme.LINE};
-            }}
-        """)
+        sidebar.setStyleSheet(f"QFrame {{ background-color: {Theme.GROUND}; border-right: 1px solid {Theme.LINE}; }}")
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(0, 16, 0, 16)
         sb_layout.setSpacing(4)
@@ -329,7 +321,6 @@ class MainWindow(QMainWindow):
         self.btn_tab_cards = SidebarButton("Cards and Deck")
         self.btn_tab_settings = SidebarButton("Settings")
         self.btn_tab_advanced = SidebarButton("Advanced")
-
         self.tab_buttons = [
             self.btn_tab_play,
             self.btn_tab_account,
@@ -347,19 +338,15 @@ class MainWindow(QMainWindow):
         sb_layout.addStretch()
         ws_layout.addWidget(sidebar)
 
-        # Stacked Views
         self.stack = QStackedWidget()
-        self.play_view = PlayView(self)
-        self.account_view = AccountView(self)
         self.cards_view = CardsView(self)
+        self.play_view = PlayView(self, catalog=self.cards_view.catalog)
+        self.account_view = AccountView(self)
         self.settings_view = SettingsView(self)
         self.advanced_view = AdvancedView(self)
 
-        self.stack.addWidget(self.play_view)      # 0
-        self.stack.addWidget(self.account_view)   # 1
-        self.stack.addWidget(self.cards_view)     # 2
-        self.stack.addWidget(self.settings_view)  # 3
-        self.stack.addWidget(self.advanced_view)  # 4
+        for view in (self.play_view, self.account_view, self.cards_view, self.settings_view, self.advanced_view):
+            self.stack.addWidget(view)
 
         ws_layout.addWidget(self.stack, stretch=1)
         self.main_splitter.addWidget(workspace)
@@ -369,12 +356,7 @@ class MainWindow(QMainWindow):
         # -------------------------------------------------------------
         self.log_panel = QFrame()
         self.log_panel.setMinimumWidth(320)
-        self.log_panel.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE_LOW};
-                border-left: 1px solid {Theme.LINE};
-            }}
-        """)
+        self.log_panel.setStyleSheet(f"QFrame {{ background-color: {Theme.PLATE_LOW}; border-left: 1px solid {Theme.LINE}; }}")
         lp_layout = QVBoxLayout(self.log_panel)
         lp_layout.setContentsMargins(10, 10, 10, 10)
         lp_layout.setSpacing(8)
@@ -382,82 +364,10 @@ class MainWindow(QMainWindow):
         log_splitter = QSplitter(Qt.Orientation.Vertical)
         log_splitter.setChildrenCollapsible(False)
 
-        # Server Log Box
-        box_server = QFrame()
-        box_server.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-            }}
-        """)
-        bs_layout = QVBoxLayout(box_server)
-        bs_layout.setContentsMargins(0, 0, 0, 0)
-        bs_layout.setSpacing(0)
-
-        header_srv = QFrame()
-        header_srv.setFixedHeight(30)
-        header_srv.setStyleSheet(f"background-color: {Theme.PLATE}; border-bottom: 1px solid {Theme.LINE};")
-        hs_layout = QHBoxLayout(header_srv)
-        hs_layout.setContentsMargins(12, 0, 12, 0)
-        lbl_srv_title = QLabel("Server")
-        lbl_srv_title.setStyleSheet(f"color: {Theme.TEXT}; font-size: 13px; font-weight: 600; border: none;")
-        hs_layout.addWidget(lbl_srv_title)
-        hs_layout.addStretch()
-
-        self.txt_server_log = QPlainTextEdit()
-        self.txt_server_log.setReadOnly(True)
-        self.txt_server_log.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {Theme.GROUND};
-                color: {Theme.TEXT_MUTED};
-                font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
-                font-size: 12px;
-                border: none;
-                padding: 6px;
-            }}
-        """)
-        bs_layout.addWidget(header_srv)
-        bs_layout.addWidget(self.txt_server_log)
+        box_server, self.txt_server_log = self._make_log_box("Server", Theme.TEXT_MUTED)
+        box_game, self.txt_game_log = self._make_log_box("Game", Theme.ICE)
         log_splitter.addWidget(box_server)
-
-        # Game Log Box
-        box_game = QFrame()
-        box_game.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-            }}
-        """)
-        bg_layout = QVBoxLayout(box_game)
-        bg_layout.setContentsMargins(0, 0, 0, 0)
-        bg_layout.setSpacing(0)
-
-        header_game = QFrame()
-        header_game.setFixedHeight(30)
-        header_game.setStyleSheet(f"background-color: {Theme.PLATE}; border-bottom: 1px solid {Theme.LINE};")
-        hg_layout = QHBoxLayout(header_game)
-        hg_layout.setContentsMargins(12, 0, 12, 0)
-        lbl_game_title = QLabel("Game")
-        lbl_game_title.setStyleSheet(f"color: {Theme.TEXT}; font-size: 13px; font-weight: 600; border: none;")
-        hg_layout.addWidget(lbl_game_title)
-        hg_layout.addStretch()
-
-        self.txt_game_log = QPlainTextEdit()
-        self.txt_game_log.setReadOnly(True)
-        self.txt_game_log.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {Theme.GROUND};
-                color: {Theme.ICE};
-                font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
-                font-size: 12px;
-                border: none;
-                padding: 6px;
-            }}
-        """)
-        bg_layout.addWidget(header_game)
-        bg_layout.addWidget(self.txt_game_log)
         log_splitter.addWidget(box_game)
-
         log_splitter.setSizes([260, 360])
         lp_layout.addWidget(log_splitter)
 
@@ -470,12 +380,7 @@ class MainWindow(QMainWindow):
         # =============================================================
         statusbar = QFrame()
         statusbar.setFixedHeight(28)
-        statusbar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE};
-                border-top: 1px solid {Theme.LINE};
-            }}
-        """)
+        statusbar.setStyleSheet(f"QFrame {{ background-color: {Theme.PLATE}; border-top: 1px solid {Theme.LINE}; }}")
         sb_bottom_layout = QHBoxLayout(statusbar)
         sb_bottom_layout.setContentsMargins(16, 0, 16, 0)
 
@@ -501,49 +406,32 @@ class MainWindow(QMainWindow):
         """)
         self.btn_toggle_logs.clicked.connect(self._toggle_logs)
         sb_bottom_layout.addWidget(self.btn_toggle_logs)
-
         root_layout.addWidget(statusbar)
 
-        # Activate first tab
         self._switch_tab(0)
 
     def _wire_signals(self):
-        # Play view controls
         self.play_view.launch_requested.connect(self._launch_game)
         self.play_view.stop_requested.connect(self._stop_game)
         self.play_view.open_logs_requested.connect(self._show_logs)
-
-        # Account view logs
         self.account_view.log_message.connect(self._append_server_log)
-
-        # Settings view logs
-        if hasattr(self.settings_view, "log_message"):
-            self.settings_view.log_message.connect(self._append_server_log)
-
-        # Cards view signals
+        self.settings_view.log_message.connect(self._append_server_log)
         self.cards_view.deck_changed.connect(self._on_deck_changed)
-
-        # Game process signals
         self.game_process.started.connect(self._on_game_started)
         self.game_process.finished.connect(self._on_game_finished)
         self.game_process.log_received.connect(self._append_game_log)
 
     def _on_deck_changed(self):
+        self.play_view.catalog = self.cards_view.catalog
         self.play_view.refresh_leader_card()
         self._poll_status()
 
-    # -----------------------------------------------------------------
-    # Navigation
-    # -----------------------------------------------------------------
     def _switch_tab(self, index: int):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.tab_buttons):
             btn.setChecked(i == index)
             btn.update_style(i == index)
 
-    # -----------------------------------------------------------------
-    # Logs drawer management
-    # -----------------------------------------------------------------
     def _toggle_logs(self):
         self._logs_visible = not self._logs_visible
         self.log_panel.setVisible(self._logs_visible)
@@ -559,54 +447,42 @@ class MainWindow(QMainWindow):
     def _append_game_log(self, text: str):
         self.txt_game_log.appendPlainText(text.rstrip())
 
-    # -----------------------------------------------------------------
-    # Process & Server Lifecycle
-    # -----------------------------------------------------------------
-    def _poll_status(self):
-        statuses = self.server_manager.get_all_statuses()
-        active_count = sum(1 for s in statuses.values() if s.is_running)
-        total_count = len(statuses)
+    def _set_game_running_ui(self, running: bool):
+        self.btn_play_top.setEnabled(not running)
+        self.btn_stop_game.setEnabled(running)
+        self.play_view.btn_play_hero.setEnabled(not running)
 
-        status_str = f"Server ports {active_count}/{total_count} up"
+    def _poll_status(self):
+        status = get_server_status()
+        status_str = f"Server ports {status.up_count}/4 up"
         game_str = "Game running" if self.game_process.is_running else "Game not running"
         full_status = f"{status_str} - {game_str}"
 
         self.lbl_header_status.setText(full_status)
         self.lbl_bottom_status.setText(f"{full_status} | English v1.1.2")
-
-        if hasattr(self.play_view, "update_server_status"):
-            self.play_view.update_server_status(active_count == total_count, status_str)
+        self.play_view.update_server_status(status.is_all_online, status_str)
 
     def _launch_game(self):
         if self.game_process.is_running:
             return
 
         self._show_logs()
-        self.btn_play_top.setEnabled(False)
-        self.btn_stop_game.setEnabled(True)
-        if hasattr(self.play_view, "btn_play_hero"):
-            self.play_view.btn_play_hero.setEnabled(False)
+        self._set_game_running_ui(True)
 
-        # On-Demand Server: Check if server is running before launching
-        if self._auto_manage_server:
-            status = self.server_manager.get_status()
-            if not status.is_all_online:
-                self._append_server_log("[LAUNCHER] Server stack offline. Starting MariaDB and Artemis on-demand...")
-                self._server_worker = ServerStartupWorker()
-                self._server_worker.progress.connect(self._append_server_log)
-                self._server_worker.finished.connect(self._on_server_ready_and_launch)
-                self._server_worker.start()
-                return
+        if self._auto_manage_server and not get_server_status().is_all_online:
+            self._append_server_log("[LAUNCHER] Server stack offline. Starting MariaDB and Artemis on-demand...")
+            self._server_worker = ServerStartupWorker()
+            self._server_worker.progress.connect(self._append_server_log)
+            self._server_worker.finished.connect(self._on_server_ready_and_launch)
+            self._server_worker.start()
+            return
 
         self._start_game_process()
 
     def _on_server_ready_and_launch(self, success: bool, error_msg: str):
         self._poll_status()
         if not success:
-            self.btn_play_top.setEnabled(True)
-            self.btn_stop_game.setEnabled(False)
-            if hasattr(self.play_view, "btn_play_hero"):
-                self.play_view.btn_play_hero.setEnabled(True)
+            self._set_game_running_ui(False)
             self._append_server_log(f"[LAUNCHER] ERROR: Failed to start server stack: {error_msg}")
             QMessageBox.critical(self, "Server Error", f"Failed to start local server stack:\n{error_msg}")
             return
@@ -623,22 +499,14 @@ class MainWindow(QMainWindow):
         self.game_process.terminate()
 
     def _on_game_started(self):
-        self.btn_play_top.setEnabled(False)
-        self.btn_stop_game.setEnabled(True)
-        if hasattr(self.play_view, "btn_play_hero"):
-            self.play_view.btn_play_hero.setEnabled(False)
+        self._set_game_running_ui(True)
         self._poll_status()
 
     def _on_game_finished(self, code: int):
-        self.btn_play_top.setEnabled(True)
-        self.btn_stop_game.setEnabled(False)
-        if hasattr(self.play_view, "btn_play_hero"):
-            self.play_view.btn_play_hero.setEnabled(True)
-
+        self._set_game_running_ui(False)
         if self._auto_manage_server:
             self._append_server_log(f"[LAUNCHER] Game finished (exit code {code}). Stopping server stack on-demand...")
             stop_server_stack()
-
         self._poll_status()
 
     def closeEvent(self, event):
@@ -653,5 +521,5 @@ class MainWindow(QMainWindow):
             self,
             "Check for updates",
             "You are running Fate/Grand Order Arcade Launcher v1.1.2 with complete English Translation Package.\n\n"
-            "Your installation is up to date."
+            "Your installation is up to date.",
         )

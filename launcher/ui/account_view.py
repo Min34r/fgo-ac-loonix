@@ -488,24 +488,47 @@ class AccountView(QWidget):
         hlayout.addStretch()
         return frame
 
-    def _use_selected_account(self):
+    def _selected_identity(self) -> Optional[tuple[str, str]]:
         if not self.selected_account:
+            return None
+        aime_id = str(self.selected_account.get("aime_id"))
+        return aime_id, self.selected_account.get("master_name", f"ID {aime_id}")
+
+    def _run_account_action(
+        self,
+        args: List[str],
+        log_msg: str,
+        ok_title: str,
+        ok_body: str,
+        err_prefix: str,
+        emit_changed_id: Optional[str] = None,
+    ):
+        def on_done(success: bool, _data: dict, err: str):
+            if success:
+                self.log_message.emit(log_msg)
+                QMessageBox.information(self, ok_title, ok_body)
+                self.refresh_accounts()
+                if emit_changed_id:
+                    self.account_changed.emit(emit_changed_id)
+            else:
+                QMessageBox.critical(self, "Error", f"{err_prefix}:\n{err}")
+
+        self._run_tool(args, on_done)
+
+    def _use_selected_account(self):
+        ident = self._selected_identity()
+        if not ident:
             QMessageBox.warning(self, "Use Account", "Please select an account first.")
             return
-
-        aime_id = str(self.selected_account.get("aime_id"))
-        name = self.selected_account.get("master_name", f"ID {aime_id}")
-
-        def on_done(success: bool, data: dict, err: str):
-            if success:
-                self.log_message.emit(f"Switched active account to {name} (Aime ID: {aime_id})")
-                QMessageBox.information(self, "Account Switched", f"Switched to account {name} (ID {aime_id}).")
-                self.refresh_accounts()
-                self.account_changed.emit(aime_id)
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to switch account:\n{err}")
-
-        self._run_tool(["use", "--aime-id", aime_id, "--json"], on_done)
+        aime_id, name = ident
+        self._run_account_action(
+            ["use", "--aime-id", aime_id, "--json"],
+            f"Switched active account to {name} (Aime ID: {aime_id})",
+            "Account Switched",
+            f"Switched to account {name} (ID {aime_id}).",
+            "Failed to switch account",
+            emit_changed_id=aime_id,
+        )
 
     def _create_new_account(self):
         dlg = NewAccountDialog(self)
@@ -522,7 +545,7 @@ class AccountView(QWidget):
                 QMessageBox.information(
                     self,
                     "Account Created",
-                    f"Account created successfully!\n\nMaster: {name}\nAime ID: {new_id}\nAccess Code: {code}"
+                    f"Account created successfully!\n\nMaster: {name}\nAime ID: {new_id}\nAccess Code: {code}",
                 )
                 self.refresh_accounts()
             else:
@@ -531,11 +554,10 @@ class AccountView(QWidget):
         self._run_tool(["create", "--name", name, "--mode", mode, "--json"], on_done)
 
     def _reset_account(self):
-        if not self.selected_account:
+        ident = self._selected_identity()
+        if not ident:
             return
-        aime_id = str(self.selected_account.get("aime_id"))
-        name = self.selected_account.get("master_name", f"ID {aime_id}")
-
+        aime_id, name = ident
         reply = QMessageBox.question(
             self,
             "Reset Account",
@@ -543,98 +565,81 @@ class AccountView(QWidget):
             "This clears owned Servants, points, items, print history, and all game progress.\n"
             "This operation cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        def on_done(success: bool, data: dict, err: str):
-            if success:
-                self.log_message.emit(f"Reset account {name} (ID {aime_id}) to normal.")
-                QMessageBox.information(self, "Account Reset", f"Account {name} has been reset.")
-                self.refresh_accounts()
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to reset account:\n{err}")
-
-        self._run_tool(["reset", "--aime-id", aime_id, "--json"], on_done)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._run_account_action(
+                ["reset", "--aime-id", aime_id, "--json"],
+                f"Reset account {name} (ID {aime_id}) to normal.",
+                "Account Reset",
+                f"Account {name} has been reset.",
+                "Failed to reset account",
+            )
 
     def _delete_account(self):
-        if not self.selected_account:
+        ident = self._selected_identity()
+        if not ident:
             return
-        aime_id = str(self.selected_account.get("aime_id"))
-        name = self.selected_account.get("master_name", f"ID {aime_id}")
-
+        aime_id, name = ident
         reply = QMessageBox.question(
             self,
             "Delete Account",
             f"Permanently delete the account {name} (Aime ID {aime_id})?\n\n"
             "The save data, Aime database identity, card mapping, and backups are deleted permanently.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        def on_done(success: bool, data: dict, err: str):
-            if success:
-                self.log_message.emit(f"Deleted account {name} (ID {aime_id}).")
-                QMessageBox.information(self, "Account Deleted", f"Account {name} has been deleted.")
-                self.refresh_accounts()
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to delete account:\n{err}")
-
-        self._run_tool(["delete", "--aime-id", aime_id, "--yes", "--json"], on_done)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._run_account_action(
+                ["delete", "--aime-id", aime_id, "--yes", "--json"],
+                f"Deleted account {name} (ID {aime_id}).",
+                "Account Deleted",
+                f"Account {name} has been deleted.",
+                "Failed to delete account",
+            )
 
     def _repair_account(self):
-        if not self.selected_account:
+        ident = self._selected_identity()
+        if not ident:
             return
-        aime_id = str(self.selected_account.get("aime_id"))
-        name = self.selected_account.get("master_name", f"ID {aime_id}")
-
-        def on_done(success: bool, data: dict, err: str):
-            if success:
-                self.log_message.emit(f"Repair finished for {name} (ID {aime_id}).")
-                QMessageBox.information(self, "Repair Finished", f"Repair completed for {name}.")
-                self.refresh_accounts()
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to repair account:\n{err}")
-
-        self._run_tool(["repair", "--aime-id", aime_id, "--json"], on_done)
+        aime_id, name = ident
+        self._run_account_action(
+            ["repair", "--aime-id", aime_id, "--json"],
+            f"Repair finished for {name} (ID {aime_id}).",
+            "Repair Finished",
+            f"Repair completed for {name}.",
+            "Failed to repair account",
+        )
 
     def _grant_items_stub(self):
         QMessageBox.information(
             self,
             "Grant Items",
-            "Item grant catalog dialog:\nYou can use the One-Click upgrades below to max materials, QP, and cards."
+            "Item grant catalog dialog:\nYou can use the One-Click upgrades below to max materials, QP, and cards.",
         )
 
     def _run_upgrade(self, tag: str, title: str):
-        if not self.selected_account:
+        ident = self._selected_identity()
+        if not ident:
             QMessageBox.warning(self, "Account Upgrade", "Please select an account first.")
             return
-        aime_id = str(self.selected_account.get("aime_id"))
-        name = self.selected_account.get("master_name", f"ID {aime_id}")
-
+        aime_id, name = ident
         reply = QMessageBox.question(
             self,
             title,
             f"Run '{title}' on account {name} (ID {aime_id})?\n\n"
             "All other progress is kept, and the save is backed up before anything is written.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        def on_done(success: bool, data: dict, err: str):
-            if success:
-                self.log_message.emit(f"{title} finished for {name} (ID {aime_id}).")
-                QMessageBox.information(self, title, f"'{title}' completed successfully for {name}!")
-                self.refresh_accounts()
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to run {title}:\n{err}")
-
-        self._run_tool(["upgrade", "--aime-id", aime_id, "--action", tag, "--json"], on_done)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._run_account_action(
+                ["upgrade", "--aime-id", aime_id, "--action", tag, "--json"],
+                f"{title} finished for {name} (ID {aime_id}).",
+                title,
+                f"'{title}' completed successfully for {name}!",
+                f"Failed to run {title}",
+            )
 
     def _run_tool(self, args: List[str], callback):
         self._set_controls_enabled(False)
@@ -648,13 +653,15 @@ class AccountView(QWidget):
         self._worker.start()
 
     def _set_controls_enabled(self, enabled: bool):
-        self.account_combo.setEnabled(enabled)
-        self.btn_use.setEnabled(enabled)
-        self.btn_new.setEnabled(enabled)
-        self.btn_reset.setEnabled(enabled)
-        self.btn_delete.setEnabled(enabled)
-        self.btn_repair.setEnabled(enabled)
-        self.btn_grant.setEnabled(enabled)
-        self.btn_refresh.setEnabled(enabled)
-        for btn in self.upgrade_buttons:
-            btn.setEnabled(enabled)
+        for w in (
+            self.account_combo,
+            self.btn_use,
+            self.btn_new,
+            self.btn_reset,
+            self.btn_delete,
+            self.btn_repair,
+            self.btn_grant,
+            self.btn_refresh,
+            *self.upgrade_buttons,
+        ):
+            w.setEnabled(enabled)

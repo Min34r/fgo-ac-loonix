@@ -8,16 +8,18 @@ import json
 import os
 import urllib.request
 import zipfile
-from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
-
-try:
-    from launcher.core.config import FGOA_ROOT
-except ImportError:
-    from .config import FGOA_ROOT
+from launcher.core.config import APP_DIR, FGOA_ROOT
 
 RELEASE_URL = "https://github.com/githubuser420x/FGOAC-scooby/releases/download/v1.1.2/FGOAC-scooby-v1.1.2.zip"
 EXPECTED_SHA256 = "76dab15be143f600f34823df0988228a409c1b821d70d8a26343ef18e23ed3a3"
+
+
+def _verify_sha256(path: str) -> bool:
+    if not os.path.isfile(path):
+        return False
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest() == EXPECTED_SHA256
 
 
 def patch_fgozh_for_wine(dll_path: str) -> bool:
@@ -34,40 +36,32 @@ def patch_fgozh_for_wine(dll_path: str) -> bool:
         return False
     try:
         with open(dll_path, "rb") as f:
-            data = bytearray(f.read())
-        target_pattern = b"\x48\x8d\x45\x40\x48\x3b\xf8\x75\xd7"
-        patched_pattern = b"\x48\x8d\x45\x20\x48\x3b\xf8\x75\xd7"
-        pos = data.find(target_pattern)
-        if pos != -1:
-            data[pos : pos + len(patched_pattern)] = patched_pattern
+            data = f.read()
+        target = b"\x48\x8d\x45\x40\x48\x3b\xf8\x75\xd7"
+        patched = b"\x48\x8d\x45\x20\x48\x3b\xf8\x75\xd7"
+        if target in data:
             with open(dll_path, "wb") as f:
-                f.write(data)
+                f.write(data.replace(target, patched, 1))
             return True
-        return data.find(patched_pattern) != -1
+        return patched in data
     except Exception:
         return False
 
 
 def ensure_fgozh_patched() -> bool:
     """Ensure all discovered fgozh.dll instances are patched for Wine."""
-    patched_any = False
-    candidates = [
-        os.path.join(FGOA_ROOT, "App", "zh", "fgozh.dll"),
-        os.path.join(FGOA_ROOT, "App", "fgozh.dll"),
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            if patch_fgozh_for_wine(c):
-                patched_any = True
-    return patched_any
+    candidates = (os.path.join(APP_DIR, "zh", "fgozh.dll"), os.path.join(APP_DIR, "fgozh.dll"))
+    return any([patch_fgozh_for_wine(c) for c in candidates if os.path.isfile(c)])
 
 
 def is_translation_installed() -> bool:
-    """Check if the translation hook and text files are present in App/zh."""
-    zh_dir = os.path.join(FGOA_ROOT, "App", "zh")
-    dll_path = os.path.join(zh_dir, "fgozh.dll")
-    text_json = os.path.join(zh_dir, "executable-text.json")
-    return os.path.isfile(dll_path) and os.path.isfile(text_json)
+    """Check if the translation hook and text files are present in App/zh or App/Localization."""
+    zh_dir = os.path.join(APP_DIR, "zh")
+    loc_dir = os.path.join(APP_DIR, "Localization")
+    return (
+        os.path.isfile(os.path.join(zh_dir, "fgozh.dll"))
+        and os.path.isfile(os.path.join(zh_dir, "executable-text.json"))
+    ) or (os.path.isfile(os.path.join(APP_DIR, "fgozh.dll")) and os.path.isdir(loc_dir))
 
 
 class TranslationInstallerWorker(QThread):
@@ -81,73 +75,46 @@ class TranslationInstallerWorker(QThread):
             os.makedirs(cache_dir, exist_ok=True)
             zip_path = os.path.join(cache_dir, "FGOAC-scooby-v1.1.2.zip")
 
-            need_download = True
-            if os.path.isfile(zip_path):
-                self.progress.emit("[TRANSLATION] Verifying existing cached zip checksum...")
-                hasher = hashlib.sha256()
-                with open(zip_path, "rb") as f:
-                    for chunk in iter(lambda: f.read(65536), b""):
-                        hasher.update(chunk)
-                if hasher.hexdigest() == EXPECTED_SHA256:
-                    self.progress.emit("[TRANSLATION] Cached release zip verified valid.")
-                    need_download = False
-                else:
-                    self.progress.emit("[TRANSLATION] Cached zip invalid, downloading full release...")
-
-            if need_download:
-                self.progress.emit(f"[TRANSLATION] Connecting to GitHub release...")
-                req = urllib.request.Request(
-                    RELEASE_URL,
-                    headers={"User-Agent": "FGOA-Linux-Launcher"}
-                )
+            if os.path.isfile(zip_path) and _verify_sha256(zip_path):
+                self.progress.emit("[TRANSLATION] Cached release zip verified valid.")
+            else:
+                self.progress.emit("[TRANSLATION] Connecting to GitHub release...")
+                req = urllib.request.Request(RELEASE_URL, headers={"User-Agent": "FGOA-Linux-Launcher"})
                 with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as out:
                     total_size = int(resp.headers.get("Content-Length", 0))
                     downloaded = 0
-                    last_reported_pct = -1
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
+                    last_pct = -1
+                    while chunk := resp.read(65536):
                         out.write(chunk)
                         downloaded += len(chunk)
                         if total_size > 0:
                             pct = int((downloaded / total_size) * 100)
-                            if pct % 10 == 0 and pct != last_reported_pct:
-                                last_reported_pct = pct
-                                mb_down = downloaded // 1024 // 1024
-                                mb_tot = total_size // 1024 // 1024
-                                self.progress.emit(f"[TRANSLATION] Downloading... {pct}% ({mb_down} MB / {mb_tot} MB)")
+                            if pct % 10 == 0 and pct != last_pct:
+                                last_pct = pct
+                                self.progress.emit(
+                                    f"[TRANSLATION] Downloading... {pct}% ({downloaded >> 20} MB / {total_size >> 20} MB)"
+                                )
 
                 self.progress.emit("[TRANSLATION] Verifying SHA256 checksum...")
-                hasher = hashlib.sha256()
-                with open(zip_path, "rb") as f:
-                    for chunk in iter(lambda: f.read(65536), b""):
-                        hasher.update(chunk)
-                if hasher.hexdigest() != EXPECTED_SHA256:
+                if not _verify_sha256(zip_path):
                     self.finished.emit(False, "Downloaded archive failed SHA256 integrity check.")
                     return
 
             self.progress.emit("[TRANSLATION] Extracting translation payload into App/zh...")
-            app_zh = os.path.join(FGOA_ROOT, "App", "zh")
+            app_zh = os.path.join(APP_DIR, "zh")
             os.makedirs(app_zh, exist_ok=True)
 
             with zipfile.ZipFile(zip_path, "r") as z:
                 for member in z.namelist():
                     if member.startswith("payload/App/zh/") and not member.endswith("/"):
-                        rel_path = member[len("payload/App/zh/"):]
-                        target_file = os.path.join(app_zh, rel_path)
-                        os.makedirs(os.path.dirname(target_file), exist_ok=True)
-                        with z.open(member) as src, open(target_file, "wb") as dst:
-                            dst.write(src.read())
-
-                    # Also summon candidates if included in payload
-                    if member == "payload/Server/artemis/titles/fgo/data/summon_candidates.json":
-                        cand_target = os.path.join(
-                            FGOA_ROOT, "Server", "artemis", "titles", "fgo", "data", "summon_candidates.json"
-                        )
-                        os.makedirs(os.path.dirname(cand_target), exist_ok=True)
-                        with z.open(member) as src, open(cand_target, "wb") as dst:
-                            dst.write(src.read())
+                        target = os.path.join(app_zh, member.removeprefix("payload/App/zh/"))
+                    elif member == "payload/Server/artemis/titles/fgo/data/summon_candidates.json":
+                        target = os.path.join(FGOA_ROOT, "Server", "artemis", "titles", "fgo", "data", "summon_candidates.json")
+                    else:
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with z.open(member) as src, open(target, "wb") as dst:
+                        dst.write(src.read())
 
             # Apply Wine compatibility patch to fgozh.dll
             target_dll = os.path.join(app_zh, "fgozh.dll")
@@ -156,13 +123,13 @@ class TranslationInstallerWorker(QThread):
                 patch_fgozh_for_wine(target_dll)
 
             # Enable translation in fgo-launcher.json if present
-            cfg_path = os.path.join(FGOA_ROOT, "App", "fgo-launcher.json")
+            cfg_path = os.path.join(APP_DIR, "fgo-launcher.json")
             if os.path.isfile(cfg_path):
                 try:
-                    with open(cfg_path, "r") as f:
+                    with open(cfg_path, "r", encoding="utf-8") as f:
                         cfg_data = json.load(f)
                     cfg_data["chineseEnabled"] = True
-                    with open(cfg_path, "w") as f:
+                    with open(cfg_path, "w", encoding="utf-8") as f:
                         json.dump(cfg_data, f, indent=2)
                 except Exception:
                     pass
