@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -431,19 +432,323 @@ class SetupWorker(QThread):
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
 
+# ------------------------------------------------------------------------------
+# Anti-Slop Component Classifier & Grouper
+# ------------------------------------------------------------------------------
+
+def classify_archive(p: Path) -> dict:
+    """
+    Anti-slop classifier: maps raw archive filenames to clean human-readable package metadata.
+    Avoids raw dump hashes and cryptic multi-volume suffixes in user-facing UI.
+    """
+    nl = p.name.lower()
+
+    # 1. Base Game
+    if "cloud" in nl or "v1.00" in nl or ("base" in nl and "1.00" in nl):
+        return {
+            "key": "base",
+            "badge": "BASE GAME",
+            "badge_color": "#7CC4E4",
+            "badge_bg": "#142838",
+            "title": "FGO Arcade Base Game (v1.00 / ROM 11.00)",
+            "desc": "Core SEGA ALLS binaries, AMFS assets & initial card catalog",
+            "priority": 0,
+        }
+
+    # 2. Daily Settlement Hotfix (check before 1.10 to prevent misclassification)
+    if "hotfix" in nl or "settlement" in nl:
+        return {
+            "key": "hotfix",
+            "badge": "HOTFIX",
+            "badge_color": "#E5C07B",
+            "badge_bg": "#332B1A",
+            "title": "Daily Settlement & Summon Hotfix",
+            "desc": "Artemis server fix for daily login settlement & battle summon stability",
+            "priority": 2,
+        }
+
+    # 3. Cumulative Update 1.10
+    if "1.10" in nl or "update" in nl or "v1.10" in nl or "fgo-1.10" in nl:
+        return {
+            "key": "update",
+            "badge": "UPDATE",
+            "badge_color": "#85E89D",
+            "badge_bg": "#1B3322",
+            "title": "Cumulative Update (v1.10 / ROM 11.51)",
+            "desc": "Version 11.51 binaries, 3,936 card artwork database & GPU optimizations",
+            "priority": 1,
+        }
+
+    # 4. Localization
+    if any(k in nl for k in ("localization", "translate", "translation", "fgozh", "scooby", "en_patch")):
+        return {
+            "key": "localization",
+            "badge": "TRANSLATION",
+            "badge_color": "#C678DD",
+            "badge_bg": "#311C3D",
+            "title": "Community Localization Pack",
+            "desc": "UI translation runtime hooks & localized text assets",
+            "priority": 3,
+        }
+
+    # 5. Generic / Custom Archive
+    clean_title = re.sub(r"-\d{8}T\d{6}Z.*$", "", p.stem)
+    clean_title = re.sub(r"\.part\d+(-00\d+)?$", "", clean_title, flags=re.IGNORECASE)
+    clean_title = clean_title.replace("_", " ").strip()
+    return {
+        "key": "custom",
+        "badge": "ARCHIVE",
+        "badge_color": "#B0B7C3",
+        "badge_bg": "#22262C",
+        "title": clean_title or p.name,
+        "desc": f"Archive package ({p.stat().st_size / (1024*1024):.1f} MB)" if p.is_file() else "Archive package",
+        "priority": 4,
+    }
+
+
+def group_archives_by_package(paths: List[Path]) -> List[dict]:
+    """
+    Groups raw split volume archives and container zips into unified logical packages.
+    """
+    groups: dict[str, dict] = {}
+    for p in paths:
+        meta = classify_archive(p)
+        key = meta["key"]
+        size = p.stat().st_size if p.is_file() else 0
+        if key not in groups:
+            groups[key] = {
+                "key": key,
+                "meta": meta,
+                "files": [p],
+                "total_bytes": size,
+            }
+        else:
+            groups[key]["files"].append(p)
+            groups[key]["total_bytes"] += size
+
+    res = list(groups.values())
+    res.sort(key=lambda g: g["meta"]["priority"])
+    for g in res:
+        bytes_count = g["total_bytes"]
+        gb = bytes_count / (1024 ** 3)
+        mb = bytes_count / (1024 ** 2)
+        g["formatted_size"] = f"{gb:.1f} GB" if gb >= 1.0 else f"{mb:.1f} MB"
+        count = len(g["files"])
+        g["formatted_count"] = f"{count} volumes" if count > 1 else "1 file"
+    return res
+
+
+# ------------------------------------------------------------------------------
+# Modern UI Widgets: SelectableMenuCard & StepBreadcrumbBar
+# ------------------------------------------------------------------------------
+
+class SelectableMenuCard(QFrame):
+    """
+    Interactive selection card for the wizard menu.
+    The entire card is clickable, hoverable, and displays glowing accent feedback.
+    """
+    clicked = pyqtSignal()
+
+    def __init__(self, icon_glyph: str, title: str, description: str, badge: str = "", parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setObjectName("SelectableMenuCard")
+        self._title = title
+        self._desc = description
+        self._badge = badge
+        self._init_ui(icon_glyph)
+
+    def _init_ui(self, icon_glyph: str):
+        self._apply_style(hover=False)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(16)
+
+        lbl_icon = QLabel(icon_glyph)
+        lbl_icon.setFixedSize(44, 44)
+        lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_icon.setStyleSheet(f"""
+            QLabel {{
+                background-color: {Theme.PLATE_LOW};
+                border: 1px solid {Theme.LINE};
+                border-radius: 22px;
+                font-size: 20px;
+            }}
+        """)
+        layout.addWidget(lbl_icon)
+
+        v_text = QVBoxLayout()
+        v_text.setSpacing(4)
+
+        h_title = QHBoxLayout()
+        h_title.setSpacing(10)
+        lbl_t = QLabel(self._title)
+        lbl_t.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {Theme.TEXT};")
+        h_title.addWidget(lbl_t)
+
+        if self._badge:
+            lbl_b = QLabel(self._badge)
+            lbl_b.setStyleSheet(f"""
+                QLabel {{
+                    background-color: #162838;
+                    color: {Theme.ICE};
+                    font-size: 10px;
+                    font-weight: 700;
+                    padding: 2px 7px;
+                    border: 1px solid #23485E;
+                    border-radius: 3px;
+                    letter-spacing: 0.5px;
+                }}
+            """)
+            h_title.addWidget(lbl_b)
+
+        h_title.addStretch()
+        v_text.addLayout(h_title)
+
+        lbl_d = QLabel(self._desc)
+        lbl_d.setWordWrap(True)
+        lbl_d.setStyleSheet(f"font-size: 12px; color: {Theme.TEXT_SOFT}; line-height: 1.4;")
+        v_text.addWidget(lbl_d)
+
+        layout.addLayout(v_text)
+        layout.addStretch()
+
+        self.lbl_arrow = QLabel("→")
+        self.lbl_arrow.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT_FAINT};")
+        layout.addWidget(self.lbl_arrow)
+
+    def _apply_style(self, hover: bool):
+        border = Theme.ICE if hover else Theme.LINE
+        bg = "#21262E" if hover else Theme.PLATE
+        self.setStyleSheet(f"""
+            QFrame#SelectableMenuCard {{
+                background-color: {bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+            }}
+        """)
+        if hasattr(self, "lbl_arrow"):
+            color = Theme.ICE if hover else Theme.TEXT_FAINT
+            self.lbl_arrow.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {color};")
+
+    def enterEvent(self, event):
+        self._apply_style(hover=True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._apply_style(hover=False)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class StepBreadcrumbBar(QWidget):
+    """Visual 3-stage breadcrumb indicator for wizard progression."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.step_labels = []
+        steps = [("1", "SOURCE"), ("2", "CONFIGURE"), ("3", "INSTALL")]
+
+        for idx, (num, name) in enumerate(steps):
+            lbl = QLabel(f"{num}. {name}")
+            lbl.setStyleSheet(f"""
+                QLabel {{
+                    color: {Theme.TEXT_FAINT};
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 4px 10px;
+                    border-radius: 4px;
+                    letter-spacing: 0.5px;
+                }}
+            """)
+            layout.addWidget(lbl)
+            self.step_labels.append(lbl)
+
+            if idx < len(steps) - 1:
+                divider = QLabel("──")
+                divider.setStyleSheet(f"color: {Theme.LINE}; font-size: 10px;")
+                layout.addWidget(divider)
+
+    def set_current_step(self, page_index: int):
+        stage_map = {0: 0, 1: 1, 2: 1, 3: 2, 4: 2}
+        active_stage = stage_map.get(page_index, 0)
+        names = ["SOURCE", "CONFIGURE", "INSTALL"]
+
+        for idx, lbl in enumerate(self.step_labels):
+            name = names[idx]
+            if idx < active_stage:
+                lbl.setText(f"✓ {name}")
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: #162B1D;
+                        color: {Theme.READY};
+                        font-size: 11px;
+                        font-weight: 700;
+                        padding: 4px 10px;
+                        border: 1px solid #234B2E;
+                        border-radius: 4px;
+                        letter-spacing: 0.5px;
+                    }}
+                """)
+            elif idx == active_stage:
+                is_done = (page_index == 4)
+                color = Theme.READY if is_done else Theme.ICE
+                bg = "#162B1D" if is_done else "#142838"
+                border = "#234B2E" if is_done else Theme.ICE
+                prefix = "✓" if is_done else f"{idx+1}."
+                lbl.setText(f"{prefix} {name}")
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {bg};
+                        color: {color};
+                        font-size: 11px;
+                        font-weight: 700;
+                        padding: 4px 10px;
+                        border: 1px solid {border};
+                        border-radius: 4px;
+                        letter-spacing: 0.5px;
+                    }}
+                """)
+            else:
+                lbl.setText(f"{idx+1}. {name}")
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        color: {Theme.TEXT_FAINT};
+                        font-size: 11px;
+                        font-weight: 600;
+                        padding: 4px 10px;
+                        border: 1px solid transparent;
+                        border-radius: 4px;
+                        letter-spacing: 0.5px;
+                    }}
+                """)
+
+
+# ------------------------------------------------------------------------------
+# Redesigned Setup Wizard Dialog
+# ------------------------------------------------------------------------------
+
 class SetupWizardDialog(QDialog):
-    """Arcade-themed setup dialog guiding first-time installation or path re-configuration."""
+    """Modern arcade-themed setup dialog guiding installation and configuration."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Fate/Grand Order Arcade - Setup Wizard")
-        self.setFixedSize(700, 560)
+        self.setFixedSize(780, 600)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {Theme.GROUND};
                 color: {Theme.TEXT};
-                font-family: 'Segoe UI', system-ui, sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
             }}
             QLabel {{
                 color: {Theme.TEXT};
@@ -452,8 +757,8 @@ class SetupWizardDialog(QDialog):
                 background-color: {Theme.PLATE};
                 border: 1px solid {Theme.LINE};
                 color: {Theme.TEXT};
-                padding: 6px 10px;
-                border-radius: 2px;
+                padding: 8px 12px;
+                border-radius: 4px;
                 font-size: 13px;
             }}
             QLineEdit:focus {{
@@ -462,27 +767,31 @@ class SetupWizardDialog(QDialog):
             QProgressBar {{
                 background-color: {Theme.PLATE};
                 border: 1px solid {Theme.LINE};
-                border-radius: 2px;
-                height: 16px;
+                border-radius: 4px;
+                height: 14px;
                 text-align: center;
                 color: {Theme.TEXT};
-                font-size: 11px;
+                font-size: 10px;
             }}
             QProgressBar::chunk {{
                 background-color: {Theme.ICE};
+                border-radius: 3px;
             }}
             QPlainTextEdit {{
                 background-color: #0E1013;
                 border: 1px solid {Theme.LINE};
+                border-radius: 6px;
                 color: {Theme.TEXT_SOFT};
                 font-family: 'Consolas', 'JetBrains Mono', monospace;
                 font-size: 11px;
+                padding: 8px;
             }}
         """)
 
         self.download_dir = _get_download_dir()
         self.configured_root: Optional[Path] = None
         self.worker: Optional[SetupWorker] = None
+        self.selected_archives: List[Path] = []
 
         for icon_path in (PLATFORM_PNG, PLATFORM_ICO):
             if icon_path.is_file():
@@ -493,9 +802,9 @@ class SetupWizardDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header Banner (Mirrors MainWindow header layout and assets)
+        # Header Banner with Branding & Breadcrumbs
         header = QFrame()
-        header.setFixedHeight(66)
+        header.setFixedHeight(68)
         header.setStyleSheet(f"""
             QFrame {{
                 background-color: {Theme.GROUND};
@@ -503,10 +812,9 @@ class SetupWizardDialog(QDialog):
             }}
         """)
         h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(20, 10, 20, 10)
-        h_layout.setSpacing(14)
-        
-        # Brand box mirroring MainWindow
+        h_layout.setContentsMargins(24, 10, 24, 10)
+        h_layout.setSpacing(16)
+
         brand_box = QHBoxLayout()
         brand_box.setSpacing(12)
         lbl_icon = QLabel()
@@ -522,9 +830,9 @@ class SetupWizardDialog(QDialog):
         brand_box.addWidget(lbl_icon)
 
         v_head = QVBoxLayout()
-        v_head.setSpacing(1)
+        v_head.setSpacing(2)
         lbl_brand = QLabel("Fate/Grand Order Arcade")
-        lbl_brand.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT}; letter-spacing: 0.3px;")
+        lbl_brand.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {Theme.TEXT}; letter-spacing: 0.3px;")
         lbl_sub = QLabel("Native Linux Orchestration Setup")
         lbl_sub.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_SOFT};")
         v_head.addWidget(lbl_brand)
@@ -533,20 +841,8 @@ class SetupWizardDialog(QDialog):
         h_layout.addLayout(brand_box)
         h_layout.addStretch()
 
-        self.lbl_header_step = QLabel("SETUP WIZARD")
-        self.lbl_header_step.setStyleSheet(f"""
-            QLabel {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-                color: {Theme.ICE};
-                font-size: 11px;
-                font-weight: 700;
-                padding: 5px 12px;
-                border-radius: 3px;
-                letter-spacing: 0.8px;
-            }}
-        """)
-        h_layout.addWidget(self.lbl_header_step)
+        self.breadcrumb = StepBreadcrumbBar()
+        h_layout.addWidget(self.breadcrumb)
 
         layout.addWidget(header)
 
@@ -562,121 +858,67 @@ class SetupWizardDialog(QDialog):
 
         self.stack.currentChanged.connect(self._on_page_changed)
         self.stack.setCurrentIndex(0)
+        self.breadcrumb.set_current_step(0)
 
     def _on_page_changed(self, idx: int):
-        labels = {
-            0: "SETUP WIZARD",
-            1: "FOLDER SETUP",
-            2: "ARCHIVE SETUP",
-            3: "INSTALLING",
-            4: "SETUP COMPLETE",
-        }
-        self.lbl_header_step.setText(labels.get(idx, "SETUP WIZARD"))
+        self.breadcrumb.set_current_step(idx)
 
     # -----------------------------------------------------------------
-    # Page 0: Welcome & Setup Mode (Downloads detection with fallback)
+    # Page 0: Welcome & Setup Mode
     # -----------------------------------------------------------------
     def _build_page_welcome(self):
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(36, 20, 36, 20)
-        l.setSpacing(12)
+        l.setContentsMargins(40, 24, 40, 24)
+        l.setSpacing(14)
 
-        lbl_title = QLabel("Locate or Install Game Files")
-        lbl_title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {Theme.TEXT};")
+        lbl_title = QLabel("Get Started with Fate/Grand Order Arcade")
+        lbl_title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT};")
         l.addWidget(lbl_title)
 
         lbl_desc = QLabel(
             "Select how you would like to set up Fate/Grand Order Arcade on this machine.\n"
-            "The wizard will configure Wine, patch game binaries for Linux, and start the local server."
+            "Our native runner configures Wine prefix, patches graphics for Linux/Wayland, and coordinates the Artemis server."
         )
         lbl_desc.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px; line-height: 1.4;")
         l.addWidget(lbl_desc)
 
-        # Download Directory Auto-Detection Container
+        # Smart Auto-Detection Container
         self.frame_detection = QFrame()
         self.layout_detection = QVBoxLayout(self.frame_detection)
-        self.layout_detection.setContentsMargins(10, 8, 10, 8)
+        self.layout_detection.setContentsMargins(0, 0, 0, 0)
         l.addWidget(self.frame_detection)
 
-        self.lbl_choice_prompt = QLabel("Choose setup method:")
-        self.lbl_choice_prompt.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT_SOFT}; margin-top: 4px;")
-        l.addWidget(self.lbl_choice_prompt)
+        lbl_choice = QLabel("Or choose setup method manually:")
+        lbl_choice.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT_SOFT}; margin-top: 4px;")
+        l.addWidget(lbl_choice)
 
-        # Option A: Folder
-        box_folder = QFrame()
-        box_folder.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 10px;
-            }}
-            QFrame:hover {{
-                border-color: {Theme.ICE};
-                background-color: #21252C;
-            }}
-        """)
-        l_bf = QHBoxLayout(box_folder)
-        l_bf.setContentsMargins(14, 8, 14, 8)
-        
-        v_txt1 = QVBoxLayout()
-        lbl_opt1_title = QLabel("Select Extracted Game Folder")
-        lbl_opt1_title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {Theme.ICE};")
-        lbl_opt1_desc = QLabel("Use an existing Cloud23333 FGOA folder (containing App/ago.exe).")
-        lbl_opt1_desc.setStyleSheet(f"font-size: 12px; color: {Theme.TEXT_SOFT};")
-        v_txt1.addWidget(lbl_opt1_title)
-        v_txt1.addWidget(lbl_opt1_desc)
-        l_bf.addLayout(v_txt1)
-        l_bf.addStretch()
+        # Interactive Menu Cards
+        card_folder = SelectableMenuCard(
+            icon_glyph="📁",
+            title="Link Existing Game Folder",
+            description="Point to an already extracted FGO Arcade directory. We will configure Wine prefix, network routing, and local Artemis server.",
+            badge="DIRECT",
+        )
+        card_folder.clicked.connect(lambda: self.stack.setCurrentIndex(1))
+        l.addWidget(card_folder)
 
-        btn_go_folder = QPushButton("Select Folder")
-        btn_go_folder.setStyleSheet(Theme.PRIMARY_BUTTON)
-        btn_go_folder.clicked.connect(lambda: self.stack.setCurrentIndex(1))
-        l_bf.addWidget(btn_go_folder)
+        card_archive = SelectableMenuCard(
+            icon_glyph="📦",
+            title="Extract & Install from Archives",
+            description="Select downloaded .rar, .zip, or .7z archives. Automatically unpacks split volumes, merges 1.10 updates, and applies hotfixes.",
+            badge="CLEAN INSTALL",
+        )
+        card_archive.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        l.addWidget(card_archive)
 
-        l.addWidget(box_folder)
-
-        # Option B: Archive
-        box_arch = QFrame()
-        box_arch.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Theme.PLATE};
-                border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 10px;
-            }}
-            QFrame:hover {{
-                border-color: {Theme.ICE};
-                background-color: #21252C;
-            }}
-        """)
-        l_ba = QHBoxLayout(box_arch)
-        l_ba.setContentsMargins(14, 8, 14, 8)
-
-        v_txt2 = QVBoxLayout()
-        lbl_opt2_title = QLabel("Extract Game Rip Archive(s)")
-        lbl_opt2_title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {Theme.ICE};")
-        lbl_opt2_desc = QLabel("Unpack multi-part .rar / .zip / .7z archives with auto-password and 1.10 patching.")
-        lbl_opt2_desc.setStyleSheet(f"font-size: 12px; color: {Theme.TEXT_SOFT};")
-        v_txt2.addWidget(lbl_opt2_title)
-        v_txt2.addWidget(lbl_opt2_desc)
-        l_ba.addLayout(v_txt2)
-        l_ba.addStretch()
-
-        btn_go_arch = QPushButton("Select Archives")
-        btn_go_arch.setStyleSheet(Theme.SECONDARY_BUTTON)
-        btn_go_arch.clicked.connect(lambda: self.stack.setCurrentIndex(2))
-        l_ba.addWidget(btn_go_arch)
-
-        l.addWidget(box_arch)
         l.addStretch()
 
         self._refresh_downloads_scan()
         self.stack.addWidget(page)
 
     def _refresh_downloads_scan(self):
-        """Scan Downloads folder and render detected artifact card or empty fallback notice."""
+        """Scan Downloads folder and render smart detection card or minimal rescan bar."""
         while self.layout_detection.count():
             item = self.layout_detection.takeAt(0)
             if item.widget():
@@ -691,81 +933,108 @@ class SetupWizardDialog(QDialog):
         found_folder, found_archives = _scan_downloads_for_game(self.download_dir)
 
         if found_folder:
-            self.frame_detection.setStyleSheet(f"""
-                QFrame {{
-                    background-color: #172430;
-                    border: 1px solid {Theme.ICE};
-                    border-radius: 4px;
-                    padding: 8px;
-                }}
+            box = QFrame()
+            box.setStyleSheet("""
+                QFrame {
+                    background-color: #13241C;
+                    border: 1px solid #85E89D;
+                    border-radius: 8px;
+                    padding: 12px;
+                }
             """)
-            h_det = QHBoxLayout()
-            h_det.setContentsMargins(6, 4, 6, 4)
+            h_det = QHBoxLayout(box)
+            h_det.setContentsMargins(8, 4, 8, 4)
+
             v_info = QVBoxLayout()
-            lbl_title = QLabel("✓ Found Game Folder in Downloads")
-            lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #98C379;")
+            lbl_title = QLabel("● Existing Game Installation Detected")
+            lbl_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #85E89D;")
             lbl_sub = QLabel(f"Location: {found_folder}")
-            lbl_sub.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_SOFT};")
+            lbl_sub.setStyleSheet(f"font-size: 12px; color: {Theme.TEXT_SOFT};")
             v_info.addWidget(lbl_title)
             v_info.addWidget(lbl_sub)
             h_det.addLayout(v_info)
             h_det.addStretch()
 
-            btn_use = QPushButton("Use Detected Folder")
+            btn_use = QPushButton("Use This Installation →")
             btn_use.setStyleSheet(Theme.PRIMARY_BUTTON)
             btn_use.clicked.connect(lambda: self._use_detected_folder(found_folder))
             h_det.addWidget(btn_use)
-            self.layout_detection.addLayout(h_det)
-            self.lbl_choice_prompt.setText("Or select another location manually:")
+
+            self.layout_detection.addWidget(box)
 
         elif found_archives:
-            self.frame_detection.setStyleSheet(f"""
+            box = QFrame()
+            box.setStyleSheet(f"""
                 QFrame {{
-                    background-color: #172430;
+                    background-color: #132330;
                     border: 1px solid {Theme.ICE};
-                    border-radius: 4px;
-                    padding: 8px;
+                    border-radius: 8px;
+                    padding: 12px;
                 }}
             """)
-            h_det = QHBoxLayout()
-            h_det.setContentsMargins(6, 4, 6, 4)
+            h_det = QHBoxLayout(box)
+            h_det.setContentsMargins(8, 4, 8, 4)
+
             v_info = QVBoxLayout()
-            lbl_title = QLabel(f"✓ Found {len(found_archives)} Game Archive(s) in Downloads")
-            lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #98C379;")
-            names_str = ", ".join(a.name for a in found_archives[:2])
-            if len(found_archives) > 2:
-                names_str += f" (+{len(found_archives)-2} more)"
-            lbl_sub = QLabel(names_str)
-            lbl_sub.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_SOFT};")
+            lbl_title = QLabel("● Game Packages Discovered in Downloads")
+            lbl_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {Theme.ICE};")
+
+            # Anti-slop package chips
+            packages = group_archives_by_package(found_archives)
+            h_chips = QHBoxLayout()
+            h_chips.setSpacing(6)
+            for pkg in packages[:3]:
+                meta = pkg["meta"]
+                chip = QLabel(f"[{meta['badge']}] {meta['title']}")
+                chip.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {meta['badge_bg']};
+                        color: {meta['badge_color']};
+                        font-size: 11px;
+                        font-weight: 600;
+                        padding: 3px 8px;
+                        border-radius: 4px;
+                    }}
+                """)
+                h_chips.addWidget(chip)
+            h_chips.addStretch()
+
+            total_bytes = sum(p.stat().st_size for p in found_archives if p.is_file())
+            total_gb = total_bytes / (1024 ** 3)
+            lbl_sub = QLabel(f"{len(packages)} packages detected ({total_gb:.1f} GB total)")
+            lbl_sub.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_SOFT}; margin-top: 2px;")
+
             v_info.addWidget(lbl_title)
+            v_info.addLayout(h_chips)
             v_info.addWidget(lbl_sub)
             h_det.addLayout(v_info)
             h_det.addStretch()
 
-            btn_use = QPushButton("Extract Detected Archives")
+            btn_use = QPushButton("Configure & Install →")
             btn_use.setStyleSheet(Theme.PRIMARY_BUTTON)
             btn_use.clicked.connect(lambda: self._use_detected_archives(found_archives))
             h_det.addWidget(btn_use)
-            self.layout_detection.addLayout(h_det)
-            self.lbl_choice_prompt.setText("Or select another location manually:")
+
+            self.layout_detection.addWidget(box)
 
         else:
-            self.frame_detection.setStyleSheet(f"""
+            box = QFrame()
+            box.setStyleSheet(f"""
                 QFrame {{
                     background-color: {Theme.PLATE};
                     border: 1px dashed {Theme.LINE};
-                    border-radius: 4px;
-                    padding: 6px;
+                    border-radius: 6px;
+                    padding: 8px 12px;
                 }}
             """)
-            h_empty = QHBoxLayout()
+            h_empty = QHBoxLayout(box)
             h_empty.setContentsMargins(6, 2, 6, 2)
-            lbl_none = QLabel(f"Scanned {self.download_dir} — No game files or archives found.")
-            lbl_none.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_MUTED};")
+            lbl_none = QLabel(f"No game packages found in {self.download_dir}")
+            lbl_none.setStyleSheet(f"font-size: 12px; color: {Theme.TEXT_MUTED};")
             h_empty.addWidget(lbl_none)
             h_empty.addStretch()
 
-            btn_rescan = QPushButton("↻ Rescan")
+            btn_rescan = QPushButton("↻ Check Downloads")
             btn_rescan.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
@@ -773,7 +1042,7 @@ class SetupWizardDialog(QDialog):
                     border: 1px solid {Theme.LINE};
                     border-radius: 3px;
                     font-size: 11px;
-                    padding: 3px 8px;
+                    padding: 4px 10px;
                 }}
                 QPushButton:hover {{
                     border-color: {Theme.ICE};
@@ -782,8 +1051,7 @@ class SetupWizardDialog(QDialog):
             """)
             btn_rescan.clicked.connect(self._refresh_downloads_scan)
             h_empty.addWidget(btn_rescan)
-            self.layout_detection.addLayout(h_empty)
-            self.lbl_choice_prompt.setText("Choose setup method:")
+            self.layout_detection.addWidget(box)
 
     def _use_detected_folder(self, folder: Path):
         self.txt_folder_path.setText(str(folder))
@@ -792,32 +1060,29 @@ class SetupWizardDialog(QDialog):
 
     def _use_detected_archives(self, archives: List[Path]):
         self.selected_archives = archives
-        norm = _normalize_archives(archives)
-        display = ", ".join(p.name for p in norm[:3])
-        if len(norm) > 3:
-            display += f" (+{len(norm)-3} more)"
-        self.txt_arch_path.setText(display)
+        self._refresh_package_roster()
         self._update_disk_space_display()
         self.stack.setCurrentIndex(2)
 
     # -----------------------------------------------------------------
-    # Page 1: Existing Folder Selection with Live Validation
+    # Page 1: Existing Folder Selection with Live Inspection
     # -----------------------------------------------------------------
     def _build_page_folder(self):
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(36, 24, 36, 24)
+        l.setContentsMargins(40, 24, 40, 24)
         l.setSpacing(14)
 
-        lbl_title = QLabel("Locate Extracted Game Folder")
-        lbl_title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {Theme.TEXT};")
+        lbl_title = QLabel("Locate Installed Game Folder")
+        lbl_title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT};")
         l.addWidget(lbl_title)
 
-        lbl_desc = QLabel("Choose the root directory of your FGO Arcade installation:")
+        lbl_desc = QLabel("Choose the root directory containing App/ago.exe, Server/, and DEVICE/:")
         lbl_desc.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px;")
         l.addWidget(lbl_desc)
 
         row_input = QHBoxLayout()
+        row_input.setSpacing(10)
         self.txt_folder_path = QLineEdit()
         self.txt_folder_path.setPlaceholderText("/home/user/Games/FGOA")
         self.txt_folder_path.textChanged.connect(self._validate_folder_input)
@@ -829,33 +1094,66 @@ class SetupWizardDialog(QDialog):
         row_input.addWidget(btn_browse)
         l.addLayout(row_input)
 
-        # Validation Feedback Box
+        # Quick Preset Chips
+        row_presets = QHBoxLayout()
+        row_presets.setSpacing(8)
+        lbl_pre = QLabel("Common presets:")
+        lbl_pre.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_MUTED};")
+        row_presets.addWidget(lbl_pre)
+
+        default_fgoa = Path.home() / "Games" / "FGOA"
+        btn_pre1 = QPushButton(str(default_fgoa))
+        btn_pre1.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Theme.PLATE};
+                border: 1px solid {Theme.LINE};
+                color: {Theme.ICE};
+                font-size: 11px;
+                padding: 3px 8px;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                border-color: {Theme.ICE};
+            }}
+        """)
+        btn_pre1.clicked.connect(lambda: self.txt_folder_path.setText(str(default_fgoa)))
+        row_presets.addWidget(btn_pre1)
+        row_presets.addStretch()
+        l.addLayout(row_presets)
+
+        # Live Validation Card
         self.frame_folder_val = QFrame()
         self.frame_folder_val.setStyleSheet(f"""
             QFrame {{
                 background-color: {Theme.PLATE};
                 border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 10px;
+                border-radius: 8px;
+                padding: 14px;
             }}
         """)
-        l_val = QVBoxLayout(self.frame_folder_val)
-        self.lbl_folder_val = QLabel("Enter or browse for an existing game folder to validate.")
-        self.lbl_folder_val.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 12px;")
-        l_val.addWidget(self.lbl_folder_val)
-        l.addWidget(self.frame_folder_val)
+        self.layout_folder_val = QVBoxLayout(self.frame_folder_val)
+        self.layout_folder_val.setSpacing(8)
 
+        self.lbl_folder_val_title = QLabel("Awaiting folder selection...")
+        self.lbl_folder_val_title.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 13px; font-weight: 600;")
+        self.layout_folder_val.addWidget(self.lbl_folder_val_title)
+
+        self.lbl_folder_val_desc = QLabel("Enter or browse for an existing game folder to verify components.")
+        self.lbl_folder_val_desc.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px;")
+        self.layout_folder_val.addWidget(self.lbl_folder_val_desc)
+
+        l.addWidget(self.frame_folder_val)
         l.addStretch()
 
         # Nav Buttons
         row_nav = QHBoxLayout()
-        btn_back = QPushButton("Back")
+        btn_back = QPushButton("← Back")
         btn_back.setStyleSheet(Theme.SECONDARY_BUTTON)
         btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         row_nav.addWidget(btn_back)
         row_nav.addStretch()
 
-        self.btn_folder_next = QPushButton("Apply & Finish")
+        self.btn_folder_next = QPushButton("Apply & Continue →")
         self.btn_folder_next.setStyleSheet(Theme.PRIMARY_BUTTON)
         self.btn_folder_next.setEnabled(False)
         self.btn_folder_next.clicked.connect(self._start_folder_setup)
@@ -873,25 +1171,34 @@ class SetupWizardDialog(QDialog):
     def _validate_folder_input(self, text: str):
         path = Path(text.strip()) if text.strip() else None
         if not path or not path.exists():
-            self.lbl_folder_val.setText("Path does not exist.")
-            self.lbl_folder_val.setStyleSheet("color: #E06C75; font-size: 12px;")
-            self.frame_folder_val.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid #E06C75;")
+            self.frame_folder_val.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid #E06C75; border-radius: 8px; padding: 14px;")
+            self.lbl_folder_val_title.setText("✗ Path does not exist")
+            self.lbl_folder_val_title.setStyleSheet("color: #E06C75; font-size: 13px; font-weight: 700;")
+            self.lbl_folder_val_desc.setText("Please specify an existing directory path on disk.")
             self.btn_folder_next.setEnabled(False)
             return
 
         found = find_game_root(path)
         if found:
-            # Check version details
             is_1151 = (found / "DEVICE" / "print" / "FGO11_51_AllServants").is_dir() or (found / "App" / "Localization").is_dir()
-            ver_str = "11.51 (V1.10 Update)" if is_1151 else "11.00 (Base V1.00)"
-            self.lbl_folder_val.setText(f"✓ Valid Game Root Detected!\nLocation: {found}\nROM Version: {ver_str}")
-            self.lbl_folder_val.setStyleSheet("color: #98C379; font-size: 12px; font-weight: 600;")
-            self.frame_folder_val.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid #98C379;")
+            ver_str = "11.51 (V1.10 Cumulative Update)" if is_1151 else "11.00 (Base Game)"
+            card_count = "3,936 Bitmaps" if is_1151 else "Initial Catalog"
+
+            self.frame_folder_val.setStyleSheet("background-color: #142820; border: 1px solid #85E89D; border-radius: 8px; padding: 14px;")
+            self.lbl_folder_val_title.setText(f"✓ Valid Game Installation Detected ({ver_str})")
+            self.lbl_folder_val_title.setStyleSheet("color: #85E89D; font-size: 14px; font-weight: 700;")
+            self.lbl_folder_val_desc.setText(
+                f"Location: {found}\n"
+                f"• App/ago.exe: Verified\n"
+                f"• Card Catalog: {card_count}\n"
+                f"• Artemis Server: Ready for loopback configuration"
+            )
             self.btn_folder_next.setEnabled(True)
         else:
-            self.lbl_folder_val.setText("✗ Could not locate App/ago.exe in this folder or its subdirectories.")
-            self.lbl_folder_val.setStyleSheet("color: #E5C07B; font-size: 12px;")
-            self.frame_folder_val.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid #E5C07B;")
+            self.frame_folder_val.setStyleSheet(f"background-color: {Theme.PLATE}; border: 1px solid #E5C07B; border-radius: 8px; padding: 14px;")
+            self.lbl_folder_val_title.setText("✗ Incomplete Game Directory")
+            self.lbl_folder_val_title.setStyleSheet("color: #E5C07B; font-size: 13px; font-weight: 700;")
+            self.lbl_folder_val_desc.setText("Could not locate App/ago.exe in this folder or its direct subdirectories.")
             self.btn_folder_next.setEnabled(False)
 
     def _start_folder_setup(self):
@@ -907,39 +1214,74 @@ class SetupWizardDialog(QDialog):
         self.worker.start()
 
     # -----------------------------------------------------------------
-    # Page 2: Archive Extraction with Disk Space Check
+    # Page 2: Archive Setup with Anti-Slop Package Roster
     # -----------------------------------------------------------------
     def _build_page_archive(self):
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(36, 20, 36, 20)
-        l.setSpacing(12)
+        l.setContentsMargins(40, 24, 40, 24)
+        l.setSpacing(14)
 
-        lbl_title = QLabel("Extract Game Rip Archives")
-        lbl_title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {Theme.TEXT};")
+        lbl_title = QLabel("Configure Archive Installation")
+        lbl_title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT};")
         l.addWidget(lbl_title)
 
-        lbl_desc = QLabel("Select downloaded archives (.rar / .zip / .7z) and extraction destination:")
+        lbl_desc = QLabel("Review detected package components and choose your target installation directory:")
         lbl_desc.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px;")
         l.addWidget(lbl_desc)
 
-        # Archive Selection Row
-        l.addWidget(QLabel("Archive File(s):"))
-        row_arch = QHBoxLayout()
-        self.txt_arch_path = QLineEdit()
-        self.txt_arch_path.setPlaceholderText("Select FGOA_Cloud23333.part1.rar or other archives...")
-        self.txt_arch_path.setReadOnly(True)
-        row_arch.addWidget(self.txt_arch_path)
+        # Anti-Slop Package Shelf Frame
+        self.frame_packages = QFrame()
+        self.frame_packages.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Theme.PLATE};
+                border: 1px solid {Theme.LINE};
+                border-radius: 8px;
+                padding: 12px;
+            }}
+        """)
+        l_pkg_box = QVBoxLayout(self.frame_packages)
+        l_pkg_box.setSpacing(10)
 
-        btn_pick_arch = QPushButton("Choose...")
-        btn_pick_arch.setStyleSheet(Theme.SECONDARY_BUTTON)
+        h_pkg_head = QHBoxLayout()
+        lbl_pk_title = QLabel("Selected Packages to Extract:")
+        lbl_pk_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {Theme.TEXT};")
+        h_pkg_head.addWidget(lbl_pk_title)
+        h_pkg_head.addStretch()
+
+        btn_pick_arch = QPushButton("+ Choose Different Archives...")
+        btn_pick_arch.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {Theme.ICE};
+                font-size: 12px;
+                border: 1px solid {Theme.LINE};
+                border-radius: 3px;
+                padding: 4px 10px;
+            }}
+            QPushButton:hover {{
+                border-color: {Theme.ICE};
+                background-color: {Theme.PLATE_LOW};
+            }}
+        """)
         btn_pick_arch.clicked.connect(self._browse_archives)
-        row_arch.addWidget(btn_pick_arch)
-        l.addLayout(row_arch)
+        h_pkg_head.addWidget(btn_pick_arch)
+        l_pkg_box.addLayout(h_pkg_head)
+
+        # Container for package rows
+        self.layout_pkg_list = QVBoxLayout()
+        self.layout_pkg_list.setSpacing(6)
+        l_pkg_box.addLayout(self.layout_pkg_list)
+
+        l.addWidget(self.frame_packages)
 
         # Destination Selection Row
-        l.addWidget(QLabel("Destination Directory:"))
+        lbl_dst = QLabel("Target Installation Directory:")
+        lbl_dst.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT};")
+        l.addWidget(lbl_dst)
+
         row_dest = QHBoxLayout()
+        row_dest.setSpacing(10)
         self.txt_dest_path = QLineEdit()
         default_dest = Path.home() / "Games" / "FGOA"
         self.txt_dest_path.setText(str(default_dest))
@@ -952,42 +1294,107 @@ class SetupWizardDialog(QDialog):
         row_dest.addWidget(btn_pick_dest)
         l.addLayout(row_dest)
 
-        # Disk Space & Validation Frame
+        # Storage Health Card
         self.frame_space = QFrame()
         self.frame_space.setStyleSheet(f"""
             QFrame {{
                 background-color: {Theme.PLATE};
                 border: 1px solid {Theme.LINE};
-                border-radius: 4px;
-                padding: 10px;
+                border-radius: 6px;
+                padding: 10px 14px;
             }}
         """)
-        l_space = QVBoxLayout(self.frame_space)
-        self.lbl_space = QLabel("Disk space check...")
+        l_space = QHBoxLayout(self.frame_space)
+        l_space.setContentsMargins(6, 4, 6, 4)
+        self.lbl_space = QLabel("Checking storage health...")
         self.lbl_space.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 12px;")
         l_space.addWidget(self.lbl_space)
+        l_space.addStretch()
+        self.lbl_space_status = QLabel("● Checking")
+        self.lbl_space_status.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 12px; font-weight: 600;")
+        l_space.addWidget(self.lbl_space_status)
         l.addWidget(self.frame_space)
 
         l.addStretch()
 
         # Nav Buttons
         row_nav = QHBoxLayout()
-        btn_back = QPushButton("Back")
+        btn_back = QPushButton("← Back")
         btn_back.setStyleSheet(Theme.SECONDARY_BUTTON)
         btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         row_nav.addWidget(btn_back)
         row_nav.addStretch()
 
-        self.btn_start_extract = QPushButton("Start Extraction & Setup")
+        self.btn_start_extract = QPushButton("Start Extraction & Setup →")
         self.btn_start_extract.setStyleSheet(Theme.PRIMARY_BUTTON)
         self.btn_start_extract.setEnabled(False)
         self.btn_start_extract.clicked.connect(self._start_archive_setup)
         row_nav.addWidget(self.btn_start_extract)
         l.addLayout(row_nav)
 
-        self.selected_archives: List[Path] = []
-        self._update_disk_space_display()
         self.stack.addWidget(page)
+
+    def _refresh_package_roster(self):
+        """Render clean anti-slop package cards in the archive configuration shelf."""
+        while self.layout_pkg_list.count():
+            item = self.layout_pkg_list.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                sub_l = item.layout()
+                while sub_l.count():
+                    sub_item = sub_l.takeAt(0)
+                    if sub_item.widget():
+                        sub_item.widget().deleteLater()
+
+        if not self.selected_archives:
+            lbl_empty = QLabel("No archives currently selected. Click 'Choose Different Archives...' above.")
+            lbl_empty.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 12px; padding: 6px 0;")
+            self.layout_pkg_list.addWidget(lbl_empty)
+            return
+
+        packages = group_archives_by_package(self.selected_archives)
+        for pkg in packages:
+            meta = pkg["meta"]
+            row = QFrame()
+            row.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {Theme.PLATE_LOW};
+                    border: 1px solid {Theme.LINE_SOFT};
+                    border-radius: 5px;
+                    padding: 8px 10px;
+                }}
+            """)
+            h_row = QHBoxLayout(row)
+            h_row.setContentsMargins(6, 2, 6, 2)
+            h_row.setSpacing(12)
+
+            lbl_badge = QLabel(meta["badge"])
+            lbl_badge.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {meta['badge_bg']};
+                    color: {meta['badge_color']};
+                    font-size: 10px;
+                    font-weight: 700;
+                    padding: 2px 7px;
+                    border: 1px solid {meta['badge_color']};
+                    border-radius: 3px;
+                }}
+            """)
+            h_row.addWidget(lbl_badge)
+
+            v_txt = QVBoxLayout()
+            v_txt.setSpacing(1)
+            lbl_t = QLabel(meta["title"])
+            lbl_t.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Theme.TEXT};")
+            lbl_d = QLabel(f"{meta['desc']} • {pkg['formatted_count']} ({pkg['formatted_size']})")
+            lbl_d.setStyleSheet(f"font-size: 11px; color: {Theme.TEXT_MUTED};")
+            v_txt.addWidget(lbl_t)
+            v_txt.addWidget(lbl_d)
+            h_row.addLayout(v_txt)
+            h_row.addStretch()
+
+            self.layout_pkg_list.addWidget(row)
 
     def _browse_archives(self):
         start_dir = self.download_dir if self.download_dir.is_dir() else Path.home()
@@ -999,17 +1406,12 @@ class SetupWizardDialog(QDialog):
         )
         if files:
             self.selected_archives = [Path(f) for f in files]
-            norm = _normalize_archives(self.selected_archives)
-            display = ", ".join(p.name for p in norm[:3])
-            if len(norm) > 3:
-                display += f" (+{len(norm)-3} more)"
-            self.txt_arch_path.setText(display)
+            self._refresh_package_roster()
             self._update_disk_space_display()
 
     def _browse_dest(self):
         chosen = QFileDialog.getExistingDirectory(self, "Select Destination Folder", str(Path.home() / "Games"))
         if chosen:
-            # If user selected a parent folder like ~/Games, append FGOA
             p = Path(chosen)
             if p.name.lower() not in ("fgoa", "fgo_arcade", "fgo-arcade"):
                 p = p / "FGOA"
@@ -1032,17 +1434,21 @@ class SetupWizardDialog(QDialog):
             needed_gb = 26.0
 
             if free_gb >= needed_gb:
-                space_msg = f"✓ Free Space: {free_gb:.1f} GB available (Estimated required: ~{needed_gb:.0f} GB)"
-                color = "#98C379"
+                space_msg = f"Partition: {check_dir} • {free_gb:.1f} GB Available (Estimated required: ~{needed_gb:.0f} GB)"
+                status_txt = "✓ Sufficient Free Space"
+                color = "#85E89D"
             elif free_gb >= 10.0:
-                space_msg = f"⚠ Free Space: {free_gb:.1f} GB available (~{needed_gb:.0f} GB recommended for full rip + update)"
+                space_msg = f"Partition: {check_dir} • {free_gb:.1f} GB Available (~{needed_gb:.0f} GB recommended)"
+                status_txt = "⚠ Space Limited"
                 color = "#E5C07B"
             else:
-                space_msg = f"✗ Low Disk Space: Only {free_gb:.1f} GB available (At least 15 GB required to extract)"
+                space_msg = f"Partition: {check_dir} • Only {free_gb:.1f} GB Available"
+                status_txt = "✗ Low Disk Space"
                 color = "#E06C75"
 
-            self.lbl_space.setText(f"Target Partition: {check_dir}\n{space_msg}")
-            self.lbl_space.setStyleSheet(f"color: {color}; font-size: 12px;")
+            self.lbl_space.setText(space_msg)
+            self.lbl_space_status.setText(status_txt)
+            self.lbl_space_status.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 700;")
 
             has_archives = bool(self.selected_archives)
             self.btn_start_extract.setEnabled(has_archives and free_gb >= 5.0)
@@ -1069,11 +1475,11 @@ class SetupWizardDialog(QDialog):
     def _build_page_progress(self):
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(36, 24, 36, 24)
-        l.setSpacing(12)
+        l.setContentsMargins(40, 24, 40, 24)
+        l.setSpacing(14)
 
         lbl_title = QLabel("Setting Up Fate/Grand Order Arcade")
-        lbl_title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {Theme.TEXT};")
+        lbl_title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {Theme.TEXT};")
         l.addWidget(lbl_title)
 
         self.lbl_prog_task = QLabel("Initializing setup tasks...")
@@ -1081,10 +1487,13 @@ class SetupWizardDialog(QDialog):
         l.addWidget(self.lbl_prog_task)
 
         self.bar_prog = QProgressBar()
-        self.bar_prog.setRange(0, 0)  # Indeterminate activity
+        self.bar_prog.setRange(0, 0)
         l.addWidget(self.bar_prog)
 
-        l.addWidget(QLabel("Installation Log:"))
+        lbl_log = QLabel("Setup Log Output:")
+        lbl_log.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {Theme.TEXT_SOFT}; margin-top: 6px;")
+        l.addWidget(lbl_log)
+
         self.txt_prog_log = QPlainTextEdit()
         self.txt_prog_log.setReadOnly(True)
         l.addWidget(self.txt_prog_log)
@@ -1110,8 +1519,8 @@ class SetupWizardDialog(QDialog):
     def _build_page_complete(self):
         page = QWidget()
         l = QVBoxLayout(page)
-        l.setContentsMargins(36, 24, 36, 24)
-        l.setSpacing(14)
+        l.setContentsMargins(40, 28, 40, 28)
+        l.setSpacing(16)
         l.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         lbl_emblem = QLabel()
@@ -1119,11 +1528,11 @@ class SetupWizardDialog(QDialog):
             if icon_path.is_file():
                 lbl_emblem.setPixmap(
                     QPixmap(str(icon_path)).scaled(
-                        56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                        60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
                     )
                 )
                 break
-        lbl_emblem.setFixedSize(56, 56)
+        lbl_emblem.setFixedSize(60, 60)
         l.addWidget(lbl_emblem, alignment=Qt.AlignmentFlag.AlignCenter)
 
         lbl_done = QLabel("SETUP COMPLETE")
@@ -1135,7 +1544,7 @@ class SetupWizardDialog(QDialog):
         self.lbl_complete_info.setStyleSheet(f"color: {Theme.TEXT_SOFT}; font-size: 13px; line-height: 1.6;")
         l.addWidget(self.lbl_complete_info)
 
-        l.addSpacing(20)
+        l.addSpacing(10)
 
         btn_launch = ChamferButton(
             text="LAUNCH GAME DASHBOARD",
@@ -1148,7 +1557,7 @@ class SetupWizardDialog(QDialog):
             font_size=15,
         )
         btn_launch.setFixedHeight(48)
-        btn_launch.setFixedWidth(300)
+        btn_launch.setFixedWidth(320)
         btn_launch.clicked.connect(self.accept)
         l.addWidget(btn_launch, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1156,13 +1565,14 @@ class SetupWizardDialog(QDialog):
 
     def _update_complete_page(self, game_root: Path):
         is_1151 = (game_root / "DEVICE" / "print" / "FGO11_51_AllServants").is_dir() or (game_root / "App" / "Localization").is_dir()
-        ver = "11.51 (V1.10 Update)" if is_1151 else "11.00 (Base V1.00)"
+        ver = "11.51 (V1.10 Cumulative Update)" if is_1151 else "11.00 (Base Game)"
         self.lbl_complete_info.setText(
             f"Fate/Grand Order Arcade has been successfully configured!\n\n"
-            f"Game Location: {game_root}\n"
-            f"Detected Version: {ver}\n"
-            f"Linux Compatibility Patches: Applied\n"
-            f"Artemis Server: Configured & Ready"
+            f"• Installation: {game_root}\n"
+            f"• ROM Version: {ver}\n"
+            f"• Linux Compatibility Patches: Applied\n"
+            f"• Local Artemis Server Stack: Configured & Ready\n"
+            f"• Controls Profile: XInput & Keyboard Ready"
         )
 
 
