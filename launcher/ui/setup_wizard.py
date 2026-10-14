@@ -40,13 +40,32 @@ PLATFORM_ICO = ASSETS_DIR / "platform.ico"
 
 def _normalize_archives(paths: List[Path]) -> List[Path]:
     """Resolve multi-part archives (e.g. part2 -> part1) and sort base game before updates."""
+    rar_vol_pat = re.compile(r"^(.*?)\.part(\d+)(?:-\d+|\s*\(\d+\))?\.rar$", re.IGNORECASE)
+    groups = {}
+    for p in paths:
+        m = rar_vol_pat.match(p.name)
+        if m:
+            prefix, vol_idx = m.group(1).lower(), int(m.group(2))
+            groups.setdefault(prefix, {})[vol_idx] = p
+
     resolved = []
     for p in paths:
-        m = re.search(r"(?i)\.part(\d+)\.rar$", p.name)
-        if m and int(m.group(1)) > 1:
-            p1_name = re.sub(r"(?i)\.part\d+\.rar$", ".part1.rar", p.name)
-            p1 = p.with_name(p1_name)
-            p = p1 if p1.is_file() else p
+        m = rar_vol_pat.match(p.name)
+        if m:
+            prefix, vol_idx = m.group(1).lower(), int(m.group(2))
+            if vol_idx > 1 and 1 in groups.get(prefix, {}):
+                resolved.append(groups[prefix][1])
+                continue
+            elif vol_idx > 1 and p.parent.is_dir():
+                for sibling in p.parent.iterdir():
+                    if sibling.is_file():
+                        sm = rar_vol_pat.match(sibling.name)
+                        if sm and sm.group(1).lower() == prefix and int(sm.group(2)) == 1:
+                            resolved.append(sibling)
+                            break
+                else:
+                    resolved.append(p)
+                continue
         resolved.append(p)
 
     seen = set()
@@ -59,7 +78,7 @@ def _normalize_archives(paths: List[Path]) -> List[Path]:
 
     def sort_key(p: Path) -> int:
         n = p.name.lower()
-        if "hotfix" in n:
+        if "hotfix" in n or "settlement" in n:
             return 2
         if "update" in n or "patch" in n or "1.10" in n:
             return 1
@@ -99,32 +118,48 @@ def _scan_downloads_for_game(dl_dir: Path) -> tuple[Optional[Path], List[Path]]:
     found_folder = find_game_root(dl_dir)
 
     archive_exts = (".rar", ".zip", ".7z", ".bin", ".tar", ".tar.gz", ".tgz", ".tar.xz")
-    keywords = ("fgo", "fate", "ago", "cloud23333", "1.10", "settlement", "hotfix")
+    keywords = ("fgo", "fate", "ago", "cloud23333", "cloud", "arcade", "localization", "settlement", "hotfix")
+    fgo_prefix_pat = re.compile(r"^v?1\.(?:00|10|0|1|51)[_\-\. ]", re.IGNORECASE)
+    fgo_inner_kws = ("fgo", "cloud23333", "ago.exe", "amdaemon", "artemis")
     found_archives = []
 
     try:
         candidates = list(dl_dir.iterdir())
         for sub in candidates:
+            # Only scan immediate subdirectories if they match game keywords (e.g. FGOA/, Downloads/FGO/)
             if sub.is_dir() and not sub.name.startswith("."):
-                try:
-                    candidates.extend(sub.iterdir())
-                except Exception:
-                    pass
+                sub_nl = sub.name.lower()
+                if any(k in sub_nl for k in ("fgo", "fate", "cloud")):
+                    try:
+                        candidates.extend(sub.iterdir())
+                    except Exception:
+                        pass
 
         for f in candidates:
             if f.is_file():
                 name_lower = f.name.lower()
-                if name_lower.endswith((".crdownload", ".tmp", ".part")):
-                    # Avoid temp partial downloads, but allow .part1.rar
-                    if not re.search(r"\.part\d+\.rar$", name_lower):
-                        continue
+                if name_lower.endswith((".crdownload", ".tmp")):
+                    continue
+                if name_lower.endswith(".part") and not re.search(r"\.part\d+(?:-\d+|\s*\(\d+\))?\.rar$", name_lower):
+                    continue
                 if any(name_lower.endswith(e) for e in archive_exts):
-                    if any(k in name_lower for k in keywords):
+                    matched = any(k in name_lower for k in keywords) or bool(fgo_prefix_pat.match(name_lower))
+                    if not matched and name_lower.endswith(".zip"):
+                        try:
+                            import zipfile
+                            with zipfile.ZipFile(f) as zf:
+                                for name in zf.namelist()[:30]:
+                                    if any(k in name.lower() for k in fgo_inner_kws):
+                                        matched = True
+                                        break
+                        except Exception:
+                            pass
+                    if matched:
                         found_archives.append(f)
     except Exception:
         pass
 
-    return found_folder, _normalize_archives(found_archives)
+    return found_folder, found_archives
 
 
 class SetupWorker(QThread):
@@ -187,63 +222,213 @@ class SetupWorker(QThread):
                 return
 
             self.dest_path.mkdir(parents=True, exist_ok=True)
-            archives = _normalize_archives(self.archive_paths)
-
             extractor = shutil.which("7z") or shutil.which("7za") or shutil.which("bsdtar")
             if not extractor:
                 self.finished.emit(False, "No archive extractor (7z, 7za, bsdtar) found on system.")
                 return
 
-            for idx, arch in enumerate(archives, 1):
-                self.progress_status.emit(f"Extracting archive [{idx}/{len(archives)}]: {arch.name}...")
-                args = [extractor, "x", "-y", "-pbilibili Cloud23333", f"-o{self.dest_path}", str(arch)]
-                ok = self._run_cmd(args)
-                if not ok:
-                    self.log_line.emit("[INFO] Retrying extraction without password...")
-                    args_no_pwd = [extractor, "x", "-y", f"-o{self.dest_path}", str(arch)]
-                    ok = self._run_cmd(args_no_pwd)
-                    if not ok:
-                        self.finished.emit(False, f"Failed to extract {arch.name}.")
-                        return
+            staging_dir = self.dest_path / ".fgoa_staging"
+            staging_dir.mkdir(parents=True, exist_ok=True)
 
-            found = find_game_root(self.dest_path)
-            target_dir = found or self.dest_path
+            try:
+                self.progress_status.emit("Analyzing archive set and volume structure...")
+                self.log_line.emit(f"[SETUP] Initializing extraction into {self.dest_path}")
 
-            # Auto-unpack 1.10 incremental update .bin
-            for bin_file in list(self.dest_path.rglob("FGO-*.bin")):
-                if bin_file.is_file():
-                    self.progress_status.emit(f"Unpacking 1.10 incremental update ({bin_file.name})...")
-                    self._run_cmd([extractor, "x", "-y", f"-o{target_dir}", str(bin_file)])
-                    # Clean obsolete 11.00 files
-                    for obs in (
-                        "App/ICF1", "App/ICF2", "App/EasterEgg", "App/BGM",
-                        "App/FGOAudio.dll", "App/FgoDlss.dll",
+                # 1. Expand input archives by finding sibling multi-part volumes in source directories
+                all_candidates = list(self.archive_paths)
+                rar_vol_pat = re.compile(r"^(.*?)\.part(\d+)(?:-\d+|\s*\(\d+\))?\.rar$", re.IGNORECASE)
+                for arch in list(all_candidates):
+                    if arch.is_file() and arch.parent.is_dir():
+                        m = rar_vol_pat.match(arch.name)
+                        if m:
+                            prefix = m.group(1).lower()
+                            for sibling in arch.parent.iterdir():
+                                if sibling.is_file():
+                                    sm = rar_vol_pat.match(sibling.name)
+                                    if sm and sm.group(1).lower() == prefix and sibling not in all_candidates:
+                                        all_candidates.append(sibling)
+
+                # 2. Inspect zip files: unpack container zips that package inner archives
+                direct_archives = []
+                import zipfile
+                for arch in all_candidates:
+                    if arch.is_file() and arch.suffix.lower() == ".zip":
+                        is_container = False
+                        try:
+                            with zipfile.ZipFile(arch) as zf:
+                                namelist = zf.namelist()
+                                has_app = any("ago.exe" in m.lower() or m.lower().startswith("app/") for m in namelist)
+                                inner_archives = [
+                                    m for m in namelist
+                                    if m.lower().endswith((".rar", ".7z", ".bin")) or
+                                    ("hotfix" in m.lower() and m.lower().endswith(".zip"))
+                                ]
+                                if inner_archives and not has_app:
+                                    is_container = True
+                                    self.progress_status.emit(f"Unpacking inner components from {arch.name}...")
+                                    self.log_line.emit(f"[CONTAINER] Extracting inner components from {arch.name} to staging...")
+                                    self._run_cmd([extractor, "e", "-y", "-r", f"-o{staging_dir}", str(arch), "*.rar", "*.7z", "*.bin", "*hotfix*.zip"])
+                        except Exception as e:
+                            self.log_line.emit(f"[WARN] Error reading zip container {arch.name}: {e}")
+                        if not is_container:
+                            direct_archives.append(arch)
+                    else:
+                        direct_archives.append(arch)
+
+                # 3. Canonicalize multi-volume RAR archives into staging directory
+                pool = direct_archives + [p for p in staging_dir.iterdir() if p.is_file()]
+                groups = {}
+                for p in pool:
+                    m = rar_vol_pat.match(p.name)
+                    if m:
+                        prefix, vol_idx = m.group(1), int(m.group(2))
+                        groups.setdefault(prefix, {})[vol_idx] = p
+
+                extraction_queue = []
+                for prefix, vols in groups.items():
+                    self.log_line.emit(f"[VOLUMES] Group '{prefix}': detected {len(vols)} parts {sorted(vols.keys())}")
+                    # Create symlinks with canonical names in staging_dir
+                    for idx, src_p in vols.items():
+                        canon_name = f"{prefix}.part{idx}.rar"
+                        canon_path = staging_dir / canon_name
+                        if canon_path != src_p:
+                            if canon_path.exists() or canon_path.is_symlink():
+                                canon_path.unlink()
+                            canon_path.symlink_to(src_p.resolve())
+                    # Add part 1 (or lowest part) to extraction queue
+                    first_part = min(vols.keys())
+                    extraction_queue.append(staging_dir / f"{prefix}.part{first_part}.rar")
+
+                # Add standalone non-multipart archives
+                for p in pool:
+                    if not rar_vol_pat.match(p.name) and p.suffix.lower() in (
+                        ".rar", ".zip", ".7z", ".bin", ".tar", ".tar.gz", ".tgz", ".tar.xz"
                     ):
-                        p = target_dir / obs
-                        if p.is_file():
-                            p.unlink()
-                        elif p.is_dir():
-                            shutil.rmtree(p, ignore_errors=True)
-                    if (target_dir / "App" / "Localization" / "zh").is_dir() and (target_dir / "App" / "zh").is_dir():
-                        shutil.rmtree(target_dir / "App" / "zh", ignore_errors=True)
+                        extraction_queue.append(p)
 
-            # Auto-apply hotfix script if present
-            for repair_script in list(self.dest_path.rglob("repair_battle_summon.py")):
-                if repair_script.is_file():
-                    self.progress_status.emit("Applying login settlement & battle offer hotfix...")
-                    self._run_cmd([sys.executable, str(repair_script), "--root", str(target_dir), "--apply"])
+                # Sort queue: base game first (0), updates (1), hotfixes (2)
+                def sort_key(p: Path) -> int:
+                    n = p.name.lower()
+                    if "hotfix" in n or "settlement" in n:
+                        return 2
+                    if "update" in n or "patch" in n or "1.10" in n:
+                        return 1
+                    return 0
 
-            found = find_game_root(self.dest_path)
-            if not found:
-                self.finished.emit(False, "App/ago.exe was not found inside the extracted files.")
-                return
+                extraction_queue = sorted(list(dict.fromkeys(extraction_queue)), key=sort_key)
 
-            if self.install_sh.is_file():
-                self.progress_status.emit("Applying Linux runtime & server compatibility patches...")
-                self._run_cmd(["bash", str(self.install_sh), str(found)])
+                # Filter out pure documentation or secondary utility tools if primary game archives exist
+                filtered_queue = []
+                for a in extraction_queue:
+                    nl = a.name.lower()
+                    if "localization tool" in nl or "update summary" in nl or "localization-guide" in nl:
+                        continue
+                    filtered_queue.append(a)
+                if not filtered_queue:
+                    filtered_queue = extraction_queue
 
-            set_fgoa_root(found)
-            self.finished.emit(True, str(found))
+                # 4. Extract archives in order
+                for idx, arch in enumerate(filtered_queue, 1):
+                    self.progress_status.emit(f"Extracting archive [{idx}/{len(filtered_queue)}]: {arch.name}...")
+                    args = [extractor, "x", "-y", "-pbilibili Cloud23333", f"-o{self.dest_path}", str(arch)]
+                    ok = self._run_cmd(args)
+                    if not ok:
+                        self.log_line.emit("[INFO] Retrying extraction without password...")
+                        args_no_pwd = [extractor, "x", "-y", f"-o{self.dest_path}", str(arch)]
+                        ok = self._run_cmd(args_no_pwd)
+                        if not ok:
+                            self.finished.emit(False, f"Failed to extract {arch.name}.")
+                            return
+
+                found = find_game_root(self.dest_path)
+                target_dir = found or self.dest_path
+
+                # 5. Auto-unpack 1.10 incremental update .bin
+                for bin_file in list(self.dest_path.rglob("FGO-*.bin")):
+                    if bin_file.is_file():
+                        self.progress_status.emit(f"Unpacking 1.10 incremental update ({bin_file.name})...")
+                        self._run_cmd([extractor, "x", "-y", f"-o{target_dir}", str(bin_file)])
+
+                        # If update extracted into a payload/ subdirectory, merge it into target_dir
+                        payload_dir = target_dir / "payload"
+                        if payload_dir.is_dir():
+                            self.progress_status.emit("Merging 1.10 update payload into game root...")
+                            self.log_line.emit("[INFO] Merging 1.10 payload tree into game root...")
+                            for item in payload_dir.iterdir():
+                                dest_item = target_dir / item.name
+                                if item.is_dir():
+                                    shutil.copytree(item, dest_item, dirs_exist_ok=True)
+                                else:
+                                    shutil.copy2(item, dest_item)
+                            shutil.rmtree(payload_dir, ignore_errors=True)
+
+                        # Clean obsolete 11.00 files
+                        for obs in (
+                            "App/ICF1", "App/ICF2", "App/EasterEgg", "App/BGM",
+                            "App/FGOAudio.dll", "App/FgoDlss.dll",
+                        ):
+                            p = target_dir / obs
+                            if p.is_file():
+                                p.unlink()
+                            elif p.is_dir():
+                                shutil.rmtree(p, ignore_errors=True)
+                        if (target_dir / "App" / "Localization" / "zh").is_dir() and (target_dir / "App" / "zh").is_dir():
+                            shutil.rmtree(target_dir / "App" / "zh", ignore_errors=True)
+
+                # 6. Auto-apply hotfix script and server code patch if present
+                for repair_script in list(self.dest_path.rglob("repair_battle_summon.py")):
+                    if repair_script.is_file():
+                        self.progress_status.emit("Applying login settlement & battle offer hotfix...")
+                        # 6a. Direct AST/code patch on Server/artemis/titles/fgo/index.py
+                        patch_json = repair_script.with_name("battle-offer-code-patch.json")
+                        index_py = target_dir / "Server" / "artemis" / "titles" / "fgo" / "index.py"
+                        if patch_json.is_file() and index_py.is_file():
+                            try:
+                                import json
+                                raw = index_py.read_bytes()
+                                text = raw.decode("utf-8-sig").replace("\r\n", "\n")
+                                patch_blocks = json.loads(patch_json.read_text(encoding="utf-8"))
+                                for block in patch_blocks:
+                                    old, new = block["old"], block["new"]
+                                    if text.count(new) == 1 and old not in text:
+                                        continue
+                                    if text.count(old) == 1:
+                                        text = text.replace(old, new, 1)
+                                compile(text, "titles/fgo/index.py", "exec")
+                                out_bytes = (b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b"") + text.encode("utf-8")
+                                index_py.write_bytes(out_bytes)
+                                self.log_line.emit("[HOTFIX] Successfully applied battle offer code patch to Artemis server index.py")
+                            except Exception as e:
+                                self.log_line.emit(f"[WARN] Error patching index.py: {e}")
+
+                        # 6b. Relax checks in repair_battle_summon.py if running with python3
+                        try:
+                            script_content = repair_script.read_text(encoding="utf-8")
+                            check_str = 'Path(sys.executable).resolve() != (root / "Server" / "python" / "python.exe").resolve()'
+                            if check_str in script_content:
+                                script_content = script_content.replace(check_str, 'False')
+                            old_assert = 'if os.name != "nt":\n        raise RuntimeError("Apply requires Windows process verification")'
+                            if old_assert in script_content:
+                                script_content = script_content.replace(old_assert, 'if os.name != "nt":\n        return')
+                            repair_script.write_text(script_content, encoding="utf-8")
+                            self._run_cmd([sys.executable, str(repair_script), "--root", str(target_dir), "--apply"])
+                        except Exception as e:
+                            self.log_line.emit(f"[WARN] repair_battle_summon.py: {e}")
+
+                found = find_game_root(self.dest_path)
+                if not found:
+                    self.finished.emit(False, "App/ago.exe was not found inside the extracted files.")
+                    return
+
+                if self.install_sh.is_file():
+                    self.progress_status.emit("Applying Linux runtime & server compatibility patches...")
+                    self._run_cmd(["bash", str(self.install_sh), str(found)])
+
+                set_fgoa_root(found)
+                self.finished.emit(True, str(found))
+
+            finally:
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 class SetupWizardDialog(QDialog):

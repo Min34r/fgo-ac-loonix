@@ -293,9 +293,10 @@ def main():
     ago_path = os.path.join(app_dir, "ago.exe")
     process_file(ago_path, AGO_PATCHES, mode=mode)
 
-    # 2. Process fgozh.dll (Check both App/zh/fgozh.dll and App/fgozh.dll)
+    # 2. Process fgozh.dll (Check App/zh/fgozh.dll, App/Localization/zh/fgozh.dll, and App/fgozh.dll)
     candidate_dlls = [
         os.path.join(app_dir, "zh", "fgozh.dll"),
+        os.path.join(app_dir, "Localization", "zh", "fgozh.dll"),
         os.path.join(app_dir, "fgozh.dll"),
     ]
     for dll in candidate_dlls:

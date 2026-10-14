@@ -182,11 +182,74 @@ def test_headless_installation():
         shutil.rmtree(test_dir, ignore_errors=True)
 
 
+def test_downloads_installation(target_dir: Optional[Path] = None) -> bool:
+    """Run real archive detection and installation from ~/Downloads."""
+    from PyQt6.QtCore import QCoreApplication
+    from launcher.ui.setup_wizard import SetupWorker, _scan_downloads_for_game, _normalize_archives
+
+    app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+    dl_dir = Path.home() / "Downloads"
+
+    print("============================================================")
+    print(" Testing Archive Detection & Installation from Downloads")
+    print("============================================================")
+    print(f"Scanning directory: {dl_dir}")
+
+    folder, found = _scan_downloads_for_game(dl_dir)
+    if folder:
+        print(f"[FOUND] Existing game folder: {folder}")
+    if not found:
+        print("[FAIL] No game archives detected in Downloads folder.")
+        return False
+
+    print(f"[OK] Discovered {len(found)} candidate archive files:")
+    for idx, a in enumerate(sorted(found), 1):
+        print(f"  {idx:2d}. {a.name:45} ({a.stat().st_size / (1024*1024):.1f} MB)")
+
+    norm = _normalize_archives(found)
+    print(f"\n[OK] Normalized display items ({len(norm)} primary components):")
+    for idx, a in enumerate(norm, 1):
+        print(f"  {idx:2d}. {a.name}")
+
+    dest = target_dir or (Path.home() / "Games" / "FGOA")
+    print(f"\nTarget Destination: {dest}")
+    print("Beginning extraction and installation pipeline...")
+
+    results: list[tuple[bool, str]] = []
+    worker = SetupWorker(mode="archive", archive_paths=found, dest_path=dest)
+    worker.log_line.connect(lambda l: print(f"  {l}"))
+    worker.progress_status.connect(lambda s: print(f"[PROGRESS] {s}"))
+    worker.finished.connect(lambda ok, msg: results.append((ok, msg)))
+
+    worker.run()
+
+    if not results or not results[0][0]:
+        err = results[0][1] if results else "Unknown error"
+        print(f"\n[FAIL] Archive installation failed: {err}")
+        return False
+
+    final_root = Path(results[0][1])
+    print("\n============================================================")
+    print(f"[SUCCESS] Installation complete at: {final_root}")
+    print("============================================================")
+    is_1151 = (final_root / "DEVICE" / "print" / "FGO11_51_AllServants").is_dir()
+    print(f"  - App/ago.exe: {'OK' if (final_root / 'App' / 'ago.exe').is_file() else 'MISSING'}")
+    print(f"  - Version: {'11.51 (V1.10 Cumulative Update)' if is_1151 else '11.00 (Base)'}")
+    print(f"  - Card Bitmaps: {'OK (FGO11_51_AllServants)' if is_1151 else '11.00 only'}")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test Fate/Grand Order Arcade zip installation.")
     parser.add_argument("--test", action="store_true", help="Run full headless end-to-end verification test")
     parser.add_argument("--create-archives", type=str, metavar="DIR", help="Create mock test archives in specified directory")
+    parser.add_argument("--install-downloads", type=str, nargs="?", const="", metavar="TARGET_DIR", help="Run archive detection and installation on ~/Downloads")
     args = parser.parse_args()
+
+    if args.install_downloads is not None:
+        target = Path(args.install_downloads).expanduser().resolve() if args.install_downloads else None
+        ok = test_downloads_installation(target_dir=target)
+        sys.exit(0 if ok else 1)
 
     if args.create_archives:
         target = Path(args.create_archives).expanduser().resolve()

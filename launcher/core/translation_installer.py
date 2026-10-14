@@ -50,7 +50,11 @@ def patch_fgozh_for_wine(dll_path: str) -> bool:
 
 def ensure_fgozh_patched() -> bool:
     """Ensure all discovered fgozh.dll instances are patched for Wine."""
-    candidates = (os.path.join(APP_DIR, "zh", "fgozh.dll"), os.path.join(APP_DIR, "fgozh.dll"))
+    candidates = (
+        os.path.join(APP_DIR, "zh", "fgozh.dll"),
+        os.path.join(APP_DIR, "Localization", "zh", "fgozh.dll"),
+        os.path.join(APP_DIR, "fgozh.dll"),
+    )
     return any([patch_fgozh_for_wine(c) for c in candidates if os.path.isfile(c)])
 
 

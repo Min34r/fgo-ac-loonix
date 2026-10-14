@@ -83,6 +83,11 @@ if [ "$CHINESE_ENABLED" = "1" ] && [ -f "${APP_DIR}/zh/fgozh.dll" ]; then
     echo "[HOOK] Translation hook enabled: zh/fgozh.dll"
     export FGO_ZH_ENABLED=1
     INJECT_ARGS+=("-k" "zh\\fgozh.dll")
+elif [ "$CHINESE_ENABLED" = "1" ] && [ -f "${APP_DIR}/Localization/zh/fgozh.dll" ]; then
+    python3 -c "import sys; sys.path.insert(0, '${FGOA_ROOT}'); from launcher.core.translation_installer import patch_fgozh_for_wine; patch_fgozh_for_wine('${APP_DIR}/Localization/zh/fgozh.dll')" 2>/dev/null || true
+    echo "[HOOK] Translation hook enabled: Localization/zh/fgozh.dll"
+    export FGO_ZH_ENABLED=1
+    INJECT_ARGS+=("-k" "Localization\\zh\\fgozh.dll")
 elif [ "$CHINESE_ENABLED" = "1" ] && [ -f "${APP_DIR}/fgozh.dll" ]; then
     python3 -c "import sys; sys.path.insert(0, '${FGOA_ROOT}'); from launcher.core.translation_installer import patch_fgozh_for_wine; patch_fgozh_for_wine('${APP_DIR}/fgozh.dll')" 2>/dev/null || true
     echo "[HOOK] Translation hook enabled: fgozh.dll (1.10 Localization)"
