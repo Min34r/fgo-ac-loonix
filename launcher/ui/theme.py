@@ -164,6 +164,9 @@ class Theme:
             selection-color: {ICE};
             outline: none;
         }}
+        QLabel {{
+            background-color: transparent;
+        }}
         QPushButton {{
             outline: none;
         }}
